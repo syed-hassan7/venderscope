@@ -126,7 +126,8 @@ class ReviewUpdate(BaseModel):
 
 # --- Routes ---
 
-@router.get("/", response_model=list[VendorOut])
+@router.get("", response_model=list[VendorOut])
+@router.get("/", response_model=list[VendorOut], include_in_schema=False)
 def list_vendors(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -157,7 +158,8 @@ def list_vendors(
     return result
 
 
-@router.post("/", response_model=VendorOut)
+@router.post("", response_model=VendorOut)
+@router.post("/", response_model=VendorOut, include_in_schema=False)
 @limiter.limit("10/minute")
 def add_vendor(
     request: Request,

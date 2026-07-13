@@ -85,8 +85,8 @@ api.interceptors.response.use(
 
 // --- API methods ---
 
-export const getVendors       = ()                    => api.get('/vendors/')
-export const addVendor        = (data)                => api.post('/vendors/', data)
+export const getVendors       = ()                    => api.get('/vendors')
+export const addVendor        = (data)                => api.post('/vendors', data)
 export const deleteVendor     = (id)                  => api.delete(`/vendors/${id}`)
 export const setVendorContext = (id, data_sensitivity) => api.patch(`/vendors/${id}/context`, { data_sensitivity })
 export const getVendorEvents  = (id)                  => api.get(`/vendors/${id}/events`)

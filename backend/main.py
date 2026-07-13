@@ -103,6 +103,8 @@ app = FastAPI(
     description="Continuous passive vendor risk intelligence platform",
     version="4.0.0",
     lifespan=lifespan,
+    # Absolute slash-redirects break the Vercel → HF reverse proxy (Location points at hf.space).
+    redirect_slashes=False,
 )
 
 app.state.limiter = limiter

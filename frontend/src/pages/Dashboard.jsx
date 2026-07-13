@@ -81,7 +81,8 @@ export default function Dashboard() {
       getVendors(),
       getDashboardSummary().catch(() => null),
     ])
-    setVendors(vendorsRes.data)
+    const list = vendorsRes?.data
+    setVendors(Array.isArray(list) ? list : [])
     if (summaryRes) {
       setSummary(summaryRes.data)
     }

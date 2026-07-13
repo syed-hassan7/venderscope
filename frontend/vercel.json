@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/:path*/",
+      "destination": "https://darkitowo-venderscope-api.hf.space/api/:path*/"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://darkitowo-venderscope-api.hf.space/api/:path*"
     },
