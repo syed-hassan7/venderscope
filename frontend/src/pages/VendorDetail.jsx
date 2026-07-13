@@ -147,7 +147,7 @@ export default function VendorDetail() {
     } catch (e) { console.error('Scan failed:', e) }
     finally {
       await fetchData()
-      api.get('/quota/').then((r) => setQuotaEx(r.data.exhausted)).catch(() => {})
+      api.get('/quota').then((r) => setQuotaEx(r.data.exhausted)).catch(() => {})
       setScan(false)
     }
   }
