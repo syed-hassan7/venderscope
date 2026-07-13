@@ -7,7 +7,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
-from config import get_frontend_origins, is_production, validate_frontend_config
+from config import (
+    get_frontend_origins,
+    is_allowed_frontend_origin,
+    is_production,
+    validate_frontend_config,
+)
 from database import engine, Base, _is_sqlite
 import models
 from limiter import limiter
@@ -112,6 +117,28 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# Some hosts (e.g. HF Spaces edge) have been observed dropping
+# Access-Control-Allow-Credentials on OPTIONS while still reflecting Origin.
+# Re-assert CORS credential headers for allowed origins after the CORS middleware.
+class EnsureCorsCredentialsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        origin = request.headers.get("origin", "")
+        response = await call_next(request)
+        if origin and is_allowed_frontend_origin(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            vary = response.headers.get("Vary")
+            if not vary:
+                response.headers["Vary"] = "Origin"
+            elif "Origin" not in vary and "origin" not in vary:
+                response.headers["Vary"] = f"{vary}, Origin"
+        return response
+
+
+# Added last → outermost, so it can repair CORS headers on preflight responses.
+app.add_middleware(EnsureCorsCredentialsMiddleware)
 
 # Auth routes — rate limits applied inline with @limiter.limit
 app.include_router(auth.router,        prefix="/api/auth",        tags=["Auth"])

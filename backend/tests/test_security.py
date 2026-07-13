@@ -362,6 +362,21 @@ class TestSecurityHeaders:
         assert "Traceback" not in body
         assert "File " not in body
 
+    def test_cors_preflight_allows_credentials(self):
+        """Auth XHR uses withCredentials — OPTIONS must return ACAO + ACAC=true."""
+        origin = "http://localhost:5173"
+        resp = client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == origin
+        assert resp.headers.get("access-control-allow-credentials") == "true"
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # GUEST MODE SECURITY TESTS

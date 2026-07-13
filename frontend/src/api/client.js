@@ -1,7 +1,11 @@
 import axios from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://darkitowo-venderscope-api.hf.space/api'
-const _BACKEND_ORIGIN = BASE_URL.replace(/\/api$/, '')
+// Prefer same-origin `/api` (Vercel rewrite → HF). Absolute HF URL is fallback only.
+const BASE_URL = import.meta.env.VITE_API_URL || '/api'
+const _HF_ORIGIN = 'https://darkitowo-venderscope-api.hf.space'
+const _BACKEND_ORIGIN = BASE_URL.startsWith('http')
+  ? BASE_URL.replace(/\/api$/, '')
+  : _HF_ORIGIN
 
 // Access token stored in memory — never in localStorage or cookies
 // This prevents XSS-based token theft
