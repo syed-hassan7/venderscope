@@ -25,14 +25,16 @@ npm run preview   # preview production build locally
 ## Deployment
 
 Deployed on Vercel. `vercel.json` configures:
-- SPA rewrites (all routes → `index.html`)
+- API reverse proxy: `/api/*` → `https://darkitowo-venderscope-api.hf.space/api/*`
+- SPA fallback (non-API routes → `index.html`)
 - Security headers: CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
 
 Production env var on Vercel:
 ```env
-VITE_API_URL=https://venderscope-api.onrender.com/api
+VITE_API_URL=/api
 ```
 
+Use the same-origin `/api` path (not the HF Space URL). Direct browser calls to HF break credentialed auth/CORS.
 ## Structure
 
 ```

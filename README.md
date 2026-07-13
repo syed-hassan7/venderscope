@@ -637,10 +637,13 @@ ALERT_THRESHOLD     70
 
 ### Frontend (Vercel)
 
+Same-origin API via rewrite in `frontend/vercel.json` (`/api/*` → HF Space). Set:
+
 ```
-VITE_API_URL        https://darkitowo-venderscope-api.hf.space/api
+VITE_API_URL        /api
 ```
 
+Do **not** point `VITE_API_URL` at the HF Space origin in the browser — credentialed auth XHR fails CORS there. Local dev still uses `http://127.0.0.1:8000/api` via `.env.local` / Vite proxy.
 ---
 
 ## Motivation
