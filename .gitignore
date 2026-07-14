@@ -1,7 +1,14 @@
-# Environment variables
+# Environment variables (secrets / local overrides)
 .env
 .env.local
+backend/.env
 frontend/.env.local
+# Public Vite build config (VITE_* only — safe to commit; never put secrets in VITE_*)
+# frontend/.env.production is intentionally tracked
+!frontend/.env.example
+
+# Local security assessment artifacts
+assets/red-team/
 
 # Python cache
 __pycache__/

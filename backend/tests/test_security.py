@@ -485,72 +485,92 @@ class TestGuestScan:
 
 
 class TestGuestReport:
-    """Tests for POST /api/guest/report — PDF generation from guest scan data."""
+    """Tests for POST /api/guest/report — PDF bound to server-issued scan_token."""
 
-    _VALID_PAYLOAD = {
-        "name":   "Test Vendor",
-        "domain": "example.com",
-        "score":  45.0,
-        "events": [
-            {"source": "NVD", "severity": "HIGH", "title": "CVE-2024-1234", "description": "Test CVE"},
-        ],
-    }
+    def _token_from_scan(self, name="Test Vendor", domain="example.com"):
+        from services.guest_scan_token import create_guest_scan_token
+        return create_guest_scan_token(
+            name=name,
+            domain=domain,
+            score=45.0,
+            events=[
+                {
+                    "source": "NVD",
+                    "severity": "HIGH",
+                    "title": "CVE-2024-1234",
+                    "description": "Test CVE",
+                }
+            ],
+        )
+
+    def test_guest_scan_returns_scan_token(self):
+        resp = client.post("/api/guest/scan", json={"domain": "example.com", "name": "Example"})
+        assert resp.status_code == 200
+        assert isinstance(resp.json().get("scan_token"), str)
+        assert len(resp.json()["scan_token"]) > 20
 
     def test_guest_report_returns_pdf(self):
-        """Valid payload returns a PDF binary."""
-        resp = client.post("/api/guest/report", json=self._VALID_PAYLOAD)
+        """Valid scan_token returns a PDF binary."""
+        resp = client.post("/api/guest/report", json={"scan_token": self._token_from_scan()})
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/pdf"
-        assert len(resp.content) > 100  # non-empty PDF
+        assert len(resp.content) > 100
 
     def test_guest_report_requires_no_auth(self):
-        """No auth header needed."""
-        resp = client.post("/api/guest/report", json=self._VALID_PAYLOAD)
+        resp = client.post("/api/guest/report", json={"scan_token": self._token_from_scan()})
         assert resp.status_code not in (401, 403)
 
-    def test_guest_report_score_out_of_range_rejected(self):
-        """Score > 100 or < 0 must be rejected — 422."""
-        for bad_score in (-1.0, 101.0, 999.9):
-            payload = {**self._VALID_PAYLOAD, "score": bad_score}
-            resp = client.post("/api/guest/report", json=payload)
-            assert resp.status_code == 422, f"Expected 422 for score={bad_score}"
-
-    def test_guest_report_invalid_severity_rejected(self):
-        """Unknown severity value in events must be rejected — 422."""
-        payload = {**self._VALID_PAYLOAD, "events": [
-            {"source": "NVD", "severity": "EXTREME", "title": "CVE-X", "description": "bad"},
-        ]}
-        resp = client.post("/api/guest/report", json=payload)
+    def test_guest_report_rejects_client_invented_body(self):
+        """Legacy client-supplied score/events body must not mint a PDF."""
+        resp = client.post(
+            "/api/guest/report",
+            json={
+                "name": "Evil",
+                "domain": "example.com",
+                "score": 0.0,
+                "events": [],
+            },
+        )
         assert resp.status_code == 422
 
-    def test_guest_report_too_many_events_rejected(self):
-        """More than 50 events must be rejected — 422."""
-        events = [{"source": "NVD", "severity": "LOW", "title": f"CVE-{i}", "description": "x"} for i in range(51)]
-        resp = client.post("/api/guest/report", json={**self._VALID_PAYLOAD, "events": events})
-        assert resp.status_code == 422
+    def test_guest_report_rejects_tampered_token(self):
+        token = self._token_from_scan()
+        tampered = token[:-4] + ("AAAA" if not token.endswith("AAAA") else "BBBB")
+        resp = client.post("/api/guest/report", json={"scan_token": tampered})
+        assert resp.status_code == 400
 
-    def test_guest_report_oversized_title_rejected(self):
-        """Event title > 300 chars must fail — 422."""
-        events = [{"source": "NVD", "severity": "LOW", "title": "x" * 301, "description": "x"}]
-        resp = client.post("/api/guest/report", json={**self._VALID_PAYLOAD, "events": events})
-        assert resp.status_code == 422
-
-    def test_guest_report_oversized_description_rejected(self):
-        """Event description > 1000 chars must fail — 422."""
-        events = [{"source": "NVD", "severity": "LOW", "title": "CVE-X", "description": "x" * 1001}]
-        resp = client.post("/api/guest/report", json={**self._VALID_PAYLOAD, "events": events})
+    def test_guest_report_rejects_missing_token(self):
+        resp = client.post("/api/guest/report", json={})
         assert resp.status_code == 422
 
     def test_guest_report_xml_injection_in_title(self):
-        """XML injection characters in event title must not crash PDF generation."""
-        events = [{"source": "NVD", "severity": "HIGH", "title": "<script>alert(1)</script>&'\"", "description": "x"}]
-        resp = client.post("/api/guest/report", json={**self._VALID_PAYLOAD, "events": events})
-        # Must succeed — _xml_escape() handles it
+        """XML injection characters in tokenized event title must not crash PDF generation."""
+        from services.guest_scan_token import create_guest_scan_token
+        token = create_guest_scan_token(
+            name="Test Vendor",
+            domain="example.com",
+            score=45.0,
+            events=[
+                {
+                    "source": "NVD",
+                    "severity": "HIGH",
+                    "title": "<script>alert(1)</script>&'\"",
+                    "description": "x",
+                }
+            ],
+        )
+        resp = client.post("/api/guest/report", json={"scan_token": token})
         assert resp.status_code == 200
 
     def test_guest_report_zero_events(self):
-        """Empty events list is valid — returns PDF with no CVEs section."""
-        resp = client.post("/api/guest/report", json={**self._VALID_PAYLOAD, "events": []})
+        from services.guest_scan_token import create_guest_scan_token
+        token = create_guest_scan_token(
+            name="Test Vendor",
+            domain="example.com",
+            score=0.0,
+            events=[],
+        )
+        resp = client.post("/api/guest/report", json={"scan_token": token})
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/pdf"
 

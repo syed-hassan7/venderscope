@@ -85,6 +85,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        # API responses: lock down browser active content (SPA CSP lives on Vercel).
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        )
         if _IS_PROD:
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
@@ -98,6 +102,11 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     yield
 
+# Hide interactive API docs in production (surface mapping aid for unauthenticated parties).
+_docs = None if _IS_PROD else "/docs"
+_redoc = None if _IS_PROD else "/redoc"
+_openapi = None if _IS_PROD else "/openapi.json"
+
 app = FastAPI(
     title="VenderScope API",
     description="Continuous passive vendor risk intelligence platform",
@@ -105,6 +114,9 @@ app = FastAPI(
     lifespan=lifespan,
     # Absolute slash-redirects break the Vercel → HF reverse proxy (Location points at hf.space).
     redirect_slashes=False,
+    docs_url=_docs,
+    redoc_url=_redoc,
+    openapi_url=_openapi,
 )
 
 app.state.limiter = limiter

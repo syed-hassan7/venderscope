@@ -55,12 +55,11 @@ export default function GuestScanPage() {
     if (!result) return
     setDownloading(true)
     try {
-      const res = await downloadGuestReport({
-        name:   result.name,
-        domain: result.domain,
-        score:  result.score,
-        events: result.events,
-      })
+      if (!result.scan_token) {
+        setError('Scan session expired. Please run the scan again before downloading.')
+        return
+      }
+      const res = await downloadGuestReport({ scan_token: result.scan_token })
       const url  = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
       const link = document.createElement('a')
       link.href     = url

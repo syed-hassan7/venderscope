@@ -3,10 +3,9 @@ services:
     name: venderscope-api
     runtime: python
     buildCommand: pip install -r requirements.txt
-    # --proxy-headers: tells uvicorn to trust X-Forwarded-For from Render's load balancer
-    # so request.client.host becomes the real client IP, not the shared LB internal IP.
-    # Without this, every user shares one rate-limit bucket and the 5/min login cap is useless.
-    # --forwarded-allow-ips="*" is correct here: Render sits behind its own trusted proxy
-    # and does not publish a stable IP range to whitelist more narrowly.
+    # --proxy-headers: trust X-Forwarded-For from Render's load balancer so
+    # request.client.host is the real client IP (rate limits need this).
+    # --forwarded-allow-ips="*" remains correct on Render (no stable proxy CIDR list).
+    # Docker/HF image uses FORWARDED_ALLOW_IPS env with the same default.
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
 
