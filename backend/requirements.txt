@@ -1,6 +1,7 @@
 fastapi==0.135.3
 uvicorn[standard]==0.41.0
 requests==2.33.0
+urllib3==2.6.3
 python-dotenv==1.2.2
 apscheduler==3.11.2
 sqlalchemy==2.0.49

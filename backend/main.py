@@ -166,7 +166,11 @@ app.include_router(acceptances_router, prefix="/api/vendors",      tags=["Accept
 
 
 @app.get("/")
+@app.head("/")
 def root():
+    # HEAD support matters here: UptimeRobot's default HTTP monitor sends HEAD,
+    # and Starlette does not auto-add HEAD to a GET-only route (unlike Flask) —
+    # without this, uptime monitors get a 405 and report false downtime.
     return {"status": "VenderScope is running 🚀"}
 
 

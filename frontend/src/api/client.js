@@ -104,7 +104,9 @@ export const getDashboardSummary = ()  => api.get('/dashboard/summary')
 export const login          = (data) => api.post('/auth/login', data)
 export const register       = (data) => api.post('/auth/register', data)
 export const logout         = ()     => api.post('/auth/logout')
-export const refresh        = ()     => api.post('/auth/refresh')
+// config override used by the initial silent refresh — needs a longer bound to
+// survive an HF cold start instead of hanging on the instance's unbounded default
+export const refresh        = (config) => api.post('/auth/refresh', {}, config)
 export const getMe          = ()     => api.get('/auth/me')
 export const deleteAccount  = (body) => api.delete('/auth/account', { data: body })
 // Axios DELETE with a body uses the `data` key, not `body`

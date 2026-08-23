@@ -1,4 +1,5 @@
 import json
+import re
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, field_validator, ConfigDict
@@ -62,6 +63,20 @@ class VendorCreate(BaseModel):
         if len(v) > 253:
             raise ValueError('Domain must be under 253 characters')
         return v.strip().lower().replace('https://', '').replace('http://', '').rstrip('/')
+
+    @field_validator('company_number')
+    @classmethod
+    def company_number_format(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 20:
+            raise ValueError('Company number must be under 20 characters')
+        if not re.fullmatch(r'[A-Za-z0-9]+', v):
+            raise ValueError('Company number must be alphanumeric')
+        return v.upper()
 
 
 class VendorOut(BaseModel):

@@ -36,25 +36,21 @@ def test_compliance_discovery_finds_cert_on_linked_trust_page(monkeypatch):
 
 
 def test_fetch_page_allows_same_site_relative_redirect(monkeypatch):
-    class FakeResponse:
-        def __init__(self, status_code, location="", text=""):
-            self.status_code = status_code
-            self.headers = {"Location": location} if location else {}
-            self.text = text
-            # _fetch_page reads .content (bytes) to enforce MAX_RESPONSE_BYTES
-            # before decoding — mirror the real requests.Response interface.
-            self.content = text.encode("utf-8")
-
+    # _fetch_page now resolves+pins the IP via _validate_and_resolve, then makes
+    # the actual request through _pinned_get — mock at that boundary rather than
+    # requests.get, which the pinned fetch no longer calls directly.
     responses = [
-        FakeResponse(302, location="/security"),
-        FakeResponse(200, text="<html>Security page</html>"),
+        (302, {"Location": "/security"}, b""),
+        (200, {}, b"<html>Security page</html>"),
     ]
 
-    monkeypatch.setattr(compliance, "_is_safe_domain", lambda domain: domain == "vendor.com")
     monkeypatch.setattr(
-        compliance.requests,
-        "get",
-        lambda url, **kwargs: responses.pop(0),
+        compliance, "_validate_and_resolve",
+        lambda hostname: "203.0.113.1" if hostname == "vendor.com" else None,
+    )
+    monkeypatch.setattr(
+        compliance, "_pinned_get",
+        lambda hostname, ip, port, scheme, path, timeout: responses.pop(0),
     )
 
     result = compliance._fetch_page("https://vendor.com")

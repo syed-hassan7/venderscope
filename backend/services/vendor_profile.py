@@ -1,11 +1,6 @@
-import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-from services.compliance_discovery import _is_safe_domain
-
-HEADERS = {"User-Agent": "VenderScope/1.0 Vendor Profile Bot (security research)"}
-
-MAX_RESPONSE_BYTES = 1_048_576  # 1 MB — prevents large pages from spiking RSS
+from services.compliance_discovery import _is_safe_domain, _fetch_page as _fetch
 
 # Auth patterns — ordered most-specific to least-specific so the first match wins
 AUTH_PATTERNS = [
@@ -44,33 +39,6 @@ LOGIN_PATHS = [
 ]
 
 ICON_REL_TOKENS = ("icon", "shortcut icon", "apple-touch-icon", "mask-icon")
-
-
-def _fetch(url: str, timeout: int = 7) -> str | None:
-    max_hops = 3
-    current_url = url
-    for _ in range(max_hops):
-        try:
-            r = requests.get(current_url, headers=HEADERS, timeout=timeout, allow_redirects=False)
-            if r.status_code == 200:
-                raw = r.content
-                if len(raw) > MAX_RESPONSE_BYTES:
-                    raw = raw[:MAX_RESPONSE_BYTES]
-                return raw.decode("utf-8", errors="replace")
-            if r.status_code in (301, 302, 303, 307, 308):
-                location = r.headers.get("Location", "")
-                if not location:
-                    return None
-                next_url = urljoin(current_url, location)
-                hop_host = urlparse(next_url).netloc
-                if not _is_safe_domain(hop_host):
-                    return None
-                current_url = next_url
-                continue
-            return None
-        except Exception:
-            return None
-    return None
 
 
 def _to_text(html: str) -> str:

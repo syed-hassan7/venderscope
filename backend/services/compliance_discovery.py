@@ -3,6 +3,7 @@ import os
 import socket
 import ipaddress
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, unquote, urlparse, urlunparse
 from services.quota import consume_search_units, refund_search_units, search_is_configured
@@ -150,24 +151,34 @@ RELEVANT_PAGE_HINTS = [
 MAX_DISCOVERY_PAGES = 8
 
 
-def _is_safe_domain(domain: str) -> bool:
-    clean = domain.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+def _validate_and_resolve(hostname: str) -> str | None:
+    """
+    Full SSRF safety check on `hostname` — returns its resolved IP if safe, else None.
+    Single DNS resolution shared by the safety check and the pinned fetch that follows
+    it (see _pinned_get). Checking here and then letting a later, separate call
+    re-resolve DNS on its own would reopen a DNS-rebinding window: an attacker-
+    controlled domain (any vendor domain a user adds) could pass this check pointing
+    at a public IP, then flip to 169.254.169.254 / 127.0.0.1 / an internal host by the
+    time the real request resolves DNS again.
+    """
+    clean = hostname.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
     # URL-decode to prevent bypass via 127%2E0%2E0%2E1
     clean = unquote(clean)
 
     # Check cloud metadata endpoints not covered by regex patterns
     if clean.lower() in BLOCKED_HOSTNAMES:
-        return False
+        return None
 
     # Check against regex blocklist
     if any(re.match(p, clean) for p in BLOCKED_PATTERNS):
-        return False
+        return None
 
     # Check for decimal/hex/octal IP notation (e.g. 2130706433 → 127.0.0.1)
     try:
         ip_obj = ipaddress.ip_address(int(clean))
         if ip_obj.is_private or ip_obj.is_loopback:
-            return False
+            return None
+        return clean  # already a literal IP — nothing left to resolve
     except (ValueError, TypeError):
         pass  # Not a numeric IP, continue to DNS resolution
 
@@ -178,43 +189,85 @@ def _is_safe_domain(domain: str) -> bool:
             ip_obj = ipaddress.ip_address(resolved_ip)
             # ipaddress handles is_private, is_loopback, is_link_local natively
             if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                return False
+                return None
             # Block IPv4-mapped IPv6 addresses (::ffff:127.0.0.1 etc)
             if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
                 if ip_obj.ipv4_mapped.is_private or ip_obj.ipv4_mapped.is_loopback:
-                    return False
+                    return None
         except ValueError:
-            return False  # Unparseable IP → block
+            return None  # Unparseable IP → block
     except socket.gaierror:
-        return False
+        return None
 
-    return True
+    return resolved_ip
+
+
+def _is_safe_domain(domain: str) -> bool:
+    return _validate_and_resolve(domain) is not None
+
+
+def _pinned_get(hostname: str, ip: str, port: int, scheme: str, path: str, timeout: int):
+    """
+    Makes exactly one GET, connecting directly to the pre-validated `ip` instead of
+    letting the HTTP client re-resolve `hostname` (which is what would reopen the
+    rebinding window _validate_and_resolve exists to close). TLS SNI and certificate
+    verification still use `hostname`, so this doesn't weaken cert checking — it only
+    pins which address the socket actually connects to.
+    Returns (status_code, headers, body_bytes) — headers is urllib3's
+    case-insensitive HTTPHeaderDict (HTTP header names are case-insensitive per
+    spec; a plain dict() here would silently miss e.g. a lowercase `location:`
+    header from a server that doesn't title-case it).
+    """
+    pool_cls = urllib3.HTTPSConnectionPool if scheme == "https" else urllib3.HTTPConnectionPool
+    kwargs = {"timeout": timeout, "retries": False}
+    if scheme == "https":
+        kwargs["assert_hostname"] = hostname
+        kwargs["server_hostname"] = hostname
+    with pool_cls(ip, port=port, **kwargs) as pool:
+        r = pool.request(
+            "GET", path,
+            headers={**HEADERS, "Host": hostname},
+            redirect=False,
+            preload_content=False,
+        )
+        try:
+            body = r.read(MAX_RESPONSE_BYTES + 1)[:MAX_RESPONSE_BYTES]
+            return r.status, r.headers, body
+        finally:
+            r.release_conn()
 
 
 def _fetch_page(url: str, timeout: int = 8) -> str | None:
     max_hops = 3
     current_url = url
     for _ in range(max_hops):
-        try:
-            r = requests.get(current_url, headers=HEADERS, timeout=timeout, allow_redirects=False)
-            if r.status_code == 200:
-                raw = r.content
-                if len(raw) > MAX_RESPONSE_BYTES:
-                    raw = raw[:MAX_RESPONSE_BYTES]
-                return raw.decode("utf-8", errors="replace")
-            if r.status_code in (301, 302, 303, 307, 308):
-                location = r.headers.get("Location", "")
-                if not location:
-                    return None
-                next_url = urljoin(current_url, location)
-                hop_host = urlparse(next_url).netloc
-                if not _is_safe_domain(hop_host):
-                    return None
-                current_url = next_url
-                continue
+        parsed = urlparse(current_url)
+        hostname = parsed.hostname
+        if not hostname:
             return None
+        ip = _validate_and_resolve(hostname)
+        if not ip:
+            return None
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path or "/"
+        if parsed.query:
+            path += f"?{parsed.query}"
+        try:
+            status, headers, body = _pinned_get(hostname, ip, port, parsed.scheme, path, timeout)
         except Exception:
             return None
+        if status == 200:
+            return body.decode("utf-8", errors="replace")
+        if status in (301, 302, 303, 307, 308):
+            location = headers.get("Location", "")
+            if not location:
+                return None
+            # Redirect target is re-validated (and re-pinned) at the top of the
+            # next loop iteration via _validate_and_resolve — no separate check
+            # needed here, that would just be a second, discarded DNS lookup.
+            current_url = urljoin(current_url, location)
+            continue
+        return None
     return None
 
 

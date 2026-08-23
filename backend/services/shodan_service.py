@@ -1,4 +1,5 @@
 import config  # Loads backend/.env once with process env precedence.
+import functools
 import shodan
 import os
 
@@ -33,7 +34,11 @@ def check_shodan_exposure(domain: str) -> list[dict]:
         return []
 
     try:
-        api     = shodan.Shodan(SHODAN_API_KEY)
+        api = shodan.Shodan(SHODAN_API_KEY)
+        # shodan-python's REST client has no timeout param — it calls the underlying
+        # requests.Session directly, so a slow/unresponsive API can hang this thread
+        # forever. Bind it here since the library gives no other hook.
+        api._session.request = functools.partial(api._session.request, timeout=10)
         results = api.search(f"hostname:{domain}")
         events  = []
 

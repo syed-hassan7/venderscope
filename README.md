@@ -7,7 +7,7 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Zarak%20Hassan-0A66C2?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/zarak-hassan7/)
 [![Version](https://img.shields.io/badge/version-v4.5-violet?style=for-the-badge)](https://github.com/darkyzowo/venderscope/releases)
 
-> **Performance note:** VenderScope backend runs on Hugging Face Spaces (Docker, 2vCPU/16GB RAM). The space stays warm via UptimeRobot pings every 5 minutes. Actual scan time is 8–15s using concurrent API calls to HIBP, NVD, Companies House, Shodan, and the compliance engine simultaneously.
+> **Performance note:** VenderScope backend runs on Hugging Face Spaces (Docker, 2vCPU/16GB RAM). Free-tier Spaces still idle-sleep on inactivity — UptimeRobot pings every 5 minutes to minimize that, but a cold boot (~30–50s) can still happen after a gap in traffic or an HF-side restart. Actual scan time once warm is 8–15s using concurrent API calls to HIBP, NVD, Companies House, Shodan, and the compliance engine simultaneously.
 
 VenderScope is a continuous, passive vendor risk intelligence platform built for GRC and Information Security professionals. Instead of point-in-time annual reviews, VenderScope monitors your vendor estate 24/7 across multiple threat intelligence sources and surfaces risk drift in real time — with full user authentication, production-grade security hardening, and a cloud PostgreSQL backend.
 
@@ -50,6 +50,9 @@ Render free tier compute hours were exhausted (191.9h/month depleted in ~8 days 
 ---
 
 ## Known Limitations & Deferred Work
+
+### Shodan (Exposed Infrastructure)
+- **Search API requires a paid Shodan membership.** On a free-tier `SHODAN_API_KEY`, `check_shodan_exposure()`'s `api.search()` call gets a 403 on every scan and the source silently returns zero events. A vendor scanned on a free key will always show "no Shodan findings" regardless of real exposure — that reads as "clean," not "not checked." Upgrading the key or swapping to a free-tier-compatible endpoint (e.g. per-IP `host()` lookups) would restore this signal.
 
 ### Email (Transactional)
 - **HF Spaces blocks outbound SMTP** — ports 587 and 465 return `[Errno 101] Network is unreachable`. Gmail SMTP will never work on HF.

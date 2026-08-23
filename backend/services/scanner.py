@@ -60,7 +60,13 @@ def run_full_scan(vendor: Vendor, db: Session, force: bool = False) -> float:
         tasks["ch"] = (check_company_health, vendor.company_number)
 
     raw = {}
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    # Not a `with` block: ThreadPoolExecutor.__exit__ calls shutdown(wait=True),
+    # which would block this request on any straggler past the 60s budget anyway.
+    # shutdown(wait=False) below lets the response return promptly; orphaned
+    # workers only touch plain domain/name strings (no db/vendor object), so
+    # letting them finish in the background is harmless.
+    ex = ThreadPoolExecutor(max_workers=5)
+    try:
         futures = {ex.submit(fn, arg): key for key, (fn, arg) in tasks.items()}
 
         # Compliance submitted separately — needs two args + quota flag
@@ -69,13 +75,43 @@ def run_full_scan(vendor: Vendor, db: Session, force: bool = False) -> float:
         )
         futures[compliance_future] = "compliance"
 
-        for f in as_completed(futures, timeout=60):
-            key = futures[f]
-            try:
-                raw[key] = f.result()
-            except Exception as e:
-                print(f"[Scanner] {key} failed: {e}")
-                raw[key] = [] if key != "compliance" else {}
+        # as_completed(timeout=...) bounds the whole batch, not each future — if it
+        # trips, everything not yet done is still "pending" and gets an empty
+        # fallback below, but whatever DID finish in time is kept and still commits.
+        # (No forced result loss on a single slow source anymore.)
+        # profile/compliance return dicts; every other source returns a list —
+        # downstream code (e.g. profile_data.get("description")) assumes that
+        # shape, so the empty fallback must match it or it crashes on .get().
+        _DICT_SHAPED = ("compliance", "profile")
+
+        pending = set(futures)
+        failed_sources = 0
+        try:
+            for f in as_completed(pending, timeout=60):
+                key = futures[f]
+                pending.discard(f)
+                try:
+                    raw[key] = f.result()
+                except Exception as e:
+                    print(f"[Scanner] {key} failed: {e}")
+                    raw[key] = {} if key in _DICT_SHAPED else []
+                    failed_sources += 1
+        except TimeoutError:
+            for f in pending:
+                key = futures[f]
+                print(f"[Scanner] {key} exceeded 60s scan budget — using empty result")
+                raw[key] = {} if key in _DICT_SHAPED else []
+                failed_sources += 1
+    finally:
+        ex.shutdown(wait=False)
+
+    # If every single source failed/timed out, "no events" means "nothing was
+    # actually checked" — not "checked and clean". Don't cache a false score/
+    # last_scanned over the vendor's real last-known state.
+    if failed_sources >= len(futures):
+        print(f"[Scanner] {vendor.name} — all {len(futures)} sources failed; "
+              f"keeping previous score ({previous_score}) instead of caching a false result")
+        return previous_score
 
     # Assemble all events
     all_events = []
@@ -84,12 +120,17 @@ def run_full_scan(vendor: Vendor, db: Session, force: bool = False) -> float:
     for s in raw.get("shodan", []): all_events.append({**s, "source": "Shodan"})
     for e in raw.get("ch",     []): all_events.append({**e, "source": "CompaniesHouse"})
 
-    # Deduplicate against DB — match on CVE ID prefix only
+    # Deduplicate against DB — match on (source, exact title). NVD titles are bare
+    # CVE IDs (no spaces) so this preserves the old CVE-matching behaviour; it also
+    # stops false collisions on multi-word titles from HIBP/Shodan/CompaniesHouse,
+    # which used to share a first word (e.g. every CompaniesHouse title starts with
+    # the vendor name) and silently swallowed real new events on rescan.
     stored = {
-        title.split()[0]
-        for (title,) in db.query(RiskEvent.title).filter(RiskEvent.vendor_id == vendor.id).all()
+        (source, title)
+        for (source, title) in db.query(RiskEvent.source, RiskEvent.title)
+            .filter(RiskEvent.vendor_id == vendor.id).all()
     }
-    new_events = [e for e in all_events if e["title"].split()[0] not in stored]
+    new_events = [e for e in all_events if (e.get("source", "Unknown"), e["title"]) not in stored]
 
     for evt in new_events:
         db.add(RiskEvent(

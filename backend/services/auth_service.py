@@ -8,12 +8,19 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 import jwt
 from jwt.exceptions import PyJWTError as JWTError
+from config import is_production
 from database import get_db
 from models import User
 
 JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET environment variable is required — set it in .env")
+if is_production() and len(JWT_SECRET) < 32:
+    raise RuntimeError(
+        "JWT_SECRET is too short for production (minimum 32 characters) — a weak "
+        "secret makes every JWT forgeable. Set a long random value, e.g. "
+        "`openssl rand -hex 32`."
+    )
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
