@@ -20,9 +20,12 @@ Live production testing on v4.6 (real vendor scans through the hosted app, not j
 - **`MAX_SEARCH_UNITS_PER_SCAN = 6`** — `services/compliance_discovery.py`'s `_web_search()` now stops issuing further Tavily calls once a single `run_compliance_discovery()` invocation has net-spent 6 units, reusing the existing `quota_state["used"]` counter (no new state). Matches `ESTIMATED_SCAN_COST`, so the "estimated full scans remaining" figure now reflects a real ceiling instead of an average
 - **Global exhaustion stays separate** — the per-scan cap only returns `[]` early; it never touches `quota_state["enabled"]`/`["exhausted"]`, so the quota banner still means what it says (true monthly exhaustion, not one scan hitting its own cap)
 
+**Follow-up fix, same release:** a further live scan surfaced false-positive cert evidence — matches were accepted on bare keyword presence rather than page identity, letting a job posting and an unrelated third-party article count as attestations, plus a contaminated doc link from sitemap parsing picking up another company's marketplace profile page. Fixed with junk-path rejection (jobs/careers/marketplace-listing paths excluded from all doc-discovery stages), word-boundary matching for short tokens (`soc`/`iso`/`dpa`), and a two-gate Tavily result filter (vendor relevance + not-junk, no more unconditional first-match fallback) with real hostname matching instead of substring checks. See `_result_is_credible()` in `services/compliance_discovery.py`.
+
 Verification after this pass:
 
-- `python -m pytest -q` → `82 passed`
+- `python -m pytest -q` → `92 passed`
+- Local repro against the real vendor site that surfaced the bug — confirmed the contaminated doc link and all 4 false-positive cert badges no longer occur
 
 Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 
@@ -301,7 +304,7 @@ Top 5 events by severity are averaged, multiplied by a count factor (up to 1.4×
 
 **Stage 1 — Page discovery + scrape (free):** Fetches the vendor homepage, probes known legal/security paths, inspects sitemap URLs, follows relevant same-site trust/legal/privacy/DPA links, and searches the collected vendor-owned pages for ISO 27001, SOC 2, GDPR, Cyber Essentials, PCI DSS, and Data Processing Agreement evidence.
 
-**Stage 2 — Web search fallback (costs Tavily quota):** For certifications or security contacts not confirmed on the vendor's own pages, fires targeted Tavily search queries to find external evidence. Quota is consumed incrementally per actual query rather than per scan, capped at 6 units per single scan (`MAX_SEARCH_UNITS_PER_SCAN`) so no one scan — or a burst of them — can exhaust the shared monthly budget.
+**Stage 2 — Web search fallback (costs Tavily quota):** For certifications or security contacts not confirmed on the vendor's own pages, fires targeted Tavily search queries to find external evidence. Quota is consumed incrementally per actual query rather than per scan, capped at 6 units per single scan (`MAX_SEARCH_UNITS_PER_SCAN`) so no one scan — or a burst of them — can exhaust the shared monthly budget. A search result only counts as evidence if it's actually tied to the vendor (own domain, a recognized certifying body, or the vendor's name in the result text) *and* doesn't look like junk (job posting, marketplace listing, generic third-party explainer content) — see `_result_is_credible()`.
 
 ### Third-Party Attribution Detection
 

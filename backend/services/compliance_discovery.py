@@ -158,6 +158,42 @@ RELEVANT_PAGE_HINTS = [
     "soc", "iso", "attestation",
 ]
 
+# Never legitimate cert/doc evidence regardless of whose domain hosts them —
+# job listings and marketplace/directory profile pages describe or list an
+# entity, they don't attest on its behalf. (e.g. a scan of a jobs-marketplace
+# vendor site picking up /companies/<other-company>/ as "evidence".)
+JUNK_PATH_MARKERS = [
+    "/jobs/", "/job/", "/careers/", "/career/", "/hiring/", "/vacancy/",
+    "/vacancies/", "/apply/", "/recruiting/", "/positions/",
+    "/companies/", "/company/", "/directory/", "/listing/", "/profile/",
+]
+JUNK_TITLE_MARKERS = ["hiring", "job description", "apply now", "join our team"]
+
+# Generic third-party explainer content — only disqualifying when the result
+# is NOT on the vendor's own domain and NOT a CREDIBLE_DOMAINS body, since a
+# vendor's own blog/article legitimately announces its own compliance posture.
+GENERIC_CONTENT_PATH_MARKERS = [
+    "/blog/", "/articles/", "/article/", "/glossary/", "/resources/",
+    "/resource/", "/learn/", "/guides/", "/guide/",
+]
+GENERIC_CONTENT_TITLE_MARKERS = ["what is", "guide to", "definition of", "explained"]
+
+
+def _has_marker(haystack: str, markers: list[str]) -> bool:
+    return any(m in haystack for m in markers)
+
+
+def _pattern_matches(pattern: str, haystack: str) -> bool:
+    """
+    Word-boundary match so short DOC_PATTERNS/RELEVANT_PAGE_HINTS tokens
+    ("soc", "iso", "dpa") only match whole path segments/words instead of
+    colliding with unrelated substrings ("social", "isolated").
+    """
+    boundary = r"(?:^|[/_\-\s.])"
+    end = r"(?:$|[/_\-\s.?#])"
+    return re.search(boundary + re.escape(pattern.strip("/")) + end, haystack) is not None
+
+
 MAX_DISCOVERY_PAGES = 8
 
 
@@ -304,8 +340,10 @@ def _extract_relevant_links(html: str, base_url: str, base: str) -> list[str]:
             continue
         if not _is_same_vendor_site(full, base):
             continue
+        if _has_marker(full.lower(), JUNK_PATH_MARKERS):
+            continue
         haystack = f"{href.lower()} {text}"
-        if any(hint in haystack for hint in RELEVANT_PAGE_HINTS):
+        if any(_pattern_matches(hint, haystack) for hint in RELEVANT_PAGE_HINTS):
             candidates.append(full)
     return candidates
 
@@ -317,10 +355,12 @@ def _find_doc_links(html: str, base_url: str) -> dict:
         href = link["href"].lower()
         text = link.get_text(strip=True).lower()
         full = _normalise_url(urljoin(base_url, link["href"]))
+        if _has_marker(full.lower(), JUNK_PATH_MARKERS):
+            continue
         for doc_type, patterns in DOC_PATTERNS.items():
             if doc_type in found:
                 continue
-            if any(p in href or p in text for p in patterns):
+            if any(_pattern_matches(p, href) or _pattern_matches(p, text) for p in patterns):
                 found[doc_type] = full
     return found
 
@@ -361,10 +401,12 @@ def _find_docs_in_sitemap(base: str, found: dict) -> dict:
         urls = re.findall(r"<loc>(https?://[^<]+)</loc>", content)
         for u in urls:
             u_lower = u.lower()
+            if _has_marker(u_lower, JUNK_PATH_MARKERS):
+                continue
             for doc_type, patterns in DOC_PATTERNS.items():
                 if doc_type in result:
                     continue
-                if any(p.lstrip("/") in u_lower for p in patterns if p.startswith("/")):
+                if any(_pattern_matches(p, u_lower) for p in patterns if p.startswith("/")):
                     result[doc_type] = u
     return result
 
@@ -469,7 +511,7 @@ def _scrape_stage(full_text: str) -> dict:
     return results
 
 
-def _web_search(query: str, quota_state: dict | None = None) -> list[dict]:
+def _web_search(query: str, quota_state: dict | None = None, include_domains: list[str] | None = None) -> list[dict]:
     """Fires a single Tavily search query. Returns [] on failure or missing key."""
     if not search_is_configured():
         return []
@@ -489,11 +531,14 @@ def _web_search(query: str, quota_state: dict | None = None) -> list[dict]:
         reserved_unit = True
 
     api_key = os.getenv("TAVILY_API_KEY")
+    payload = {"query": query, "max_results": 5, "chunks_per_source": 1}
+    if include_domains:
+        payload["include_domains"] = include_domains
     try:
         r = requests.post(
             "https://api.tavily.com/search",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"query": query, "max_results": 5, "chunks_per_source": 1},
+            json=payload,
             timeout=8,
         )
         if r.status_code == 200:
@@ -511,19 +556,61 @@ def _web_search(query: str, quota_state: dict | None = None) -> list[dict]:
     return []
 
 
-def _result_is_credible(items: list[dict], cert_keywords: list[str]) -> dict | None:
-    """Returns the best matching search result item, preferring credible body domains."""
-    best = None
+def _host_matches(link: str, domain: str) -> bool:
+    """Exact-or-subdomain host match, not substring — 'vendor.com' must not
+    match a lookalike like 'vendor.com.evil.ru' or 'notvendor.com'."""
+    host = (urlparse(link).hostname or "").lower()
+    domain = domain.lower()
+    return bool(host) and (host == domain or host.endswith(f".{domain}"))
+
+
+def _is_vendor_relevant(item: dict, name: str, base: str) -> bool:
+    """True when a search result is actually tied to this vendor: a credible
+    certifying-body domain, the vendor's own domain, or the vendor's name
+    mentioned in the result text."""
+    link = item.get("link", "")
+    text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
+    if any(_host_matches(link, d) for d in CREDIBLE_DOMAINS):
+        return True
+    if _host_matches(link, base):
+        return True
+    name_tokens = [t for t in re.split(r"\W+", name.lower()) if len(t) > 2]
+    return bool(name_tokens) and all(t in text for t in name_tokens)
+
+
+def _is_junk_result(item: dict, base: str) -> bool:
+    """True when a result's shape says 'not an attestation' regardless of a
+    keyword match — a job posting listing the cert as a skill requirement, or
+    (off the vendor's own domain / a credible body) generic explainer content
+    that never actually asserts anything about this vendor."""
+    link = item.get("link", "")
+    text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
+    if _has_marker(link.lower(), JUNK_PATH_MARKERS) or _has_marker(text, JUNK_TITLE_MARKERS):
+        return True
+    is_own_domain_or_credible = _host_matches(link, base) or any(_host_matches(link, d) for d in CREDIBLE_DOMAINS)
+    if not is_own_domain_or_credible:
+        if _has_marker(link.lower(), GENERIC_CONTENT_PATH_MARKERS) or _has_marker(text, GENERIC_CONTENT_TITLE_MARKERS):
+            return True
+    return False
+
+
+def _result_is_credible(items: list[dict], cert_keywords: list[str], name: str, base: str) -> dict | None:
+    """
+    Returns the first search result that both (a) mentions a cert keyword,
+    (b) isn't shaped like junk (job posting / marketplace listing / generic
+    third-party explainer), and (c) is actually tied to this vendor (credible
+    body domain, vendor's own domain, or vendor name mentioned). No keyword-
+    only fallback — a result that fails either gate is not evidence.
+    """
     for item in items:
         text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
-        link = item.get("link", "")
         if not any(kw in text for kw in cert_keywords):
             continue
-        if any(d in link for d in CREDIBLE_DOMAINS):
+        if _is_junk_result(item, base):
+            continue
+        if _is_vendor_relevant(item, name, base):
             return item
-        if best is None:
-            best = item
-    return best
+    return None
 
 
 def _web_search_stage(vendor_name: str, domain: str, scrape_results: dict, quota_state: dict | None = None) -> dict:
@@ -545,10 +632,17 @@ def _web_search_stage(vendor_name: str, domain: str, scrape_results: dict, quota
         queries = CERT_SEARCH_QUERIES.get(cert, [])
         match   = None
         for q_template in queries:
-            query = q_template.format(name=vendor_name, domain=base)
+            # Tavily has no "site:" search operator — a literal "site:{domain}"
+            # in the query string is just noise. Strip it and scope the search
+            # via Tavily's own include_domains param instead.
+            if "site:{domain}" in q_template:
+                query = q_template.replace(" site:{domain}", "").format(name=vendor_name, domain=base)
+                items = _web_search(query, quota_state, include_domains=[base])
+            else:
+                query = q_template.format(name=vendor_name, domain=base)
+                items = _web_search(query, quota_state)
             print(f"[Compliance] Web search: {query}")
-            items = _web_search(query, quota_state)
-            match = _result_is_credible(items, CERT_KEYWORDS[cert])
+            match = _result_is_credible(items, CERT_KEYWORDS[cert], vendor_name, base)
             if match:
                 break
 

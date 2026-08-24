@@ -134,3 +134,130 @@ def test_extract_relevant_links_stays_on_vendor_site():
     assert "https://vendor.com/security" in links
     assert "https://vendor.com/legal/dpa" in links
     assert all("external.example" not in link for link in links)
+
+
+def test_extract_relevant_links_rejects_marketplace_profile_paths():
+    # Reproduces the jackandjill.ai bug: a same-site link to a *different*
+    # company's profile page on a jobs/company marketplace must not be
+    # treated as this vendor's own "security" evidence just because the
+    # path happens to contain the word "security".
+    html = '<a href="/companies/opal-security">Opal Security</a>'
+
+    links = compliance._extract_relevant_links(html, "https://jackandjill.ai", "jackandjill.ai")
+
+    assert links == []
+
+
+def test_find_doc_links_rejects_junk_paths():
+    html = '<a href="/companies/opal-security">Security</a>'
+
+    found = compliance._find_doc_links(html, "https://jackandjill.ai")
+
+    assert "security" not in found
+
+
+def test_find_docs_in_sitemap_rejects_junk_paths(monkeypatch):
+    # The actual leak in the jackandjill.ai bug: sitemap.xml lists every page
+    # on the site, including another company's marketplace profile — a bare
+    # "security" substring match there is what assigned it as this vendor's
+    # own security doc.
+    sitemap = """
+        <urlset>
+          <url><loc>https://jackandjill.ai/companies/opal-security</loc></url>
+          <url><loc>https://jackandjill.ai/security</loc></url>
+        </urlset>
+    """
+    monkeypatch.setattr(compliance, "_fetch_page", lambda url, timeout=8: sitemap if url.endswith("/sitemap.xml") else None)
+
+    found = compliance._find_docs_in_sitemap("jackandjill.ai", {})
+
+    assert found.get("security") == "https://jackandjill.ai/security"
+
+
+def test_pattern_matches_word_boundary():
+    assert compliance._pattern_matches("soc", "social media policy") is False
+    assert compliance._pattern_matches("iso", "isolated environment") is False
+    assert compliance._pattern_matches("soc", "/soc-2-report") is True
+    # "security" is a real whole-word match here — the junk-path reject list,
+    # not word-boundary matching, is what disqualifies this kind of URL.
+    assert compliance._pattern_matches("security", "/companies/opal-security") is True
+
+
+def test_result_is_credible_rejects_job_posting():
+    items = [{
+        "title": "IT Audit Subject Matter Expert",
+        "link": "https://vendor.com/jobs/ops/it-audit-sme",
+        "snippet": "Must have hands-on ISO 27001 and PCI DSS audit experience.",
+    }]
+
+    result = compliance._result_is_credible(items, compliance.CERT_KEYWORDS["iso_27001"], "Vendor Co", "vendor.com")
+
+    assert result is None
+
+
+def test_result_is_credible_rejects_generic_third_party_article():
+    items = [{
+        "title": "SOC 2 Reporting Explained",
+        "link": "https://a-lign.com/articles/soc-2-reporting",
+        "snippet": "SOC 2 is an attestation standard for service organizations.",
+    }]
+
+    result = compliance._result_is_credible(items, compliance.CERT_KEYWORDS["soc2"], "Vendor Co", "vendor.com")
+
+    assert result is None
+
+
+def test_result_is_credible_accepts_own_domain_blog_announcement():
+    items = [{
+        "title": "Vendor Co achieves SOC 2 Type II",
+        "link": "https://vendor.com/blog/soc-2-announcement",
+        "snippet": "We are proud to announce our SOC 2 Type II report.",
+    }]
+
+    result = compliance._result_is_credible(items, compliance.CERT_KEYWORDS["soc2"], "Vendor Co", "vendor.com")
+
+    assert result == items[0]
+
+
+def test_result_is_credible_rejects_lookalike_domain():
+    # "vendor.com" must not match as a substring of a lookalike host —
+    # host must equal or be a real subdomain of the vendor's domain.
+    items = [{
+        "title": "SOC 2 Type II Report",
+        "link": "https://vendor.com.evil.ru/fake-report",
+        "snippet": "This report covers SOC 2 controls in detail.",
+    }]
+
+    result = compliance._result_is_credible(items, compliance.CERT_KEYWORDS["soc2"], "Vendor Co", "vendor.com")
+
+    assert result is None
+
+
+def test_result_is_credible_accepts_credible_domain_immediately():
+    items = [{
+        "title": "Vendor Co ISO 27001 Certificate",
+        "link": "https://bsigroup.com/certificates/vendor-co-iso27001",
+        "snippet": "ISO 27001 certified",
+    }]
+
+    result = compliance._result_is_credible(items, compliance.CERT_KEYWORDS["iso_27001"], "Vendor Co", "vendor.com")
+
+    assert result == items[0]
+
+
+def test_web_search_stage_strips_dead_site_operator(monkeypatch):
+    calls = []
+
+    def fake_web_search(query, quota_state=None, include_domains=None):
+        calls.append((query, include_domains))
+        return []
+
+    monkeypatch.setattr(compliance, "_web_search", fake_web_search)
+
+    compliance._web_search_stage(
+        "Vendor Co", "vendor.com", {"dpa": "not_found"},
+        {"enabled": True, "used": 0, "exhausted": False},
+    )
+
+    assert all("site:" not in query for query, _ in calls)
+    assert any(domains == ["vendor.com"] for _, domains in calls)
