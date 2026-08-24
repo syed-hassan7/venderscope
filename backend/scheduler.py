@@ -17,6 +17,13 @@ _SELF_URL = os.getenv("SELF_URL", "").rstrip("/")
 LEASE_NAME = "primary"
 LEASE_TTL = timedelta(minutes=15)
 
+# Interim cutover flag — nightly scan is moving to a Modal scheduled Cron
+# function. Flip to "0" once the Modal cron is verified and running; leave
+# unset/"1" until then so this stays a no-op change. Remove this flag and
+# the APScheduler daily_scan job entirely once the cutover has held clean
+# for a few nights (see the Modal Cron migration plan).
+_LEGACY_SCAN_ENABLED = os.getenv("ENABLE_LEGACY_NIGHTLY_SCAN", "1") != "0"
+
 
 def _utcnow():
     return datetime.now(timezone.utc)
@@ -161,9 +168,11 @@ def start_scheduler():
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(refresh_scheduler_lease, "interval", minutes=2, id="scheduler_lease", args=[owner_id])
-    scheduler.add_job(scheduled_scan, "interval", hours=24, id="daily_scan", args=[owner_id])
+    if _LEGACY_SCAN_ENABLED:
+        scheduler.add_job(scheduled_scan, "interval", hours=24, id="daily_scan", args=[owner_id])
     scheduler.add_job(keep_alive, "interval", minutes=10, id="keep_alive", args=[owner_id])
     scheduler.add_job(cleanup_revoked_tokens, "interval", hours=6, id="token_cleanup", args=[owner_id])
     scheduler.start()
-    print("[Scheduler] Daily scan + keep-alive + token cleanup jobs started")
+    scan_status = "enabled" if _LEGACY_SCAN_ENABLED else "disabled (ENABLE_LEGACY_NIGHTLY_SCAN=0 — moved to Modal Cron)"
+    print(f"[Scheduler] Daily scan {scan_status} + keep-alive + token cleanup jobs started")
     return scheduler

@@ -43,8 +43,11 @@ if not _is_sqlite:
     _engine_kwargs.update({
         "pool_pre_ping": True,
         "pool_recycle": 240,   # Recycle before ~300s idle timeout kills connections
-        "pool_size": 3,
-        "max_overflow": 5,
+        # Overridable so a transient batch process (e.g. the Modal nightly-scan
+        # container) can run a smaller pool than the always-on app without a
+        # second copy of this connection logic.
+        "pool_size": int(os.getenv("DB_POOL_SIZE", 3)),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", 5)),
         "pool_timeout": 30,    # Don't block indefinitely waiting for a connection
     })
 
