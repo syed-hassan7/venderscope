@@ -4,6 +4,24 @@ Historical release notes for VenderScope, extracted from `README.md` to keep it 
 
 ---
 
+## v4.6 — Tavily Web Search & Modal Cron Scan
+
+Google Custom Search JSON API started 403ing on every request even with the API enabled and a correctly-scoped key — root cause traced to Google's undocumented billing-account requirement, which broke the goal of keeping this build genuinely no-cost. Compliance web search was swapped to Tavily. Separately, the nightly vendor scan gained a second, more reliable scheduling path via Modal's native Cron.
+
+- **Compliance web search: Google CSE → Tavily** — `services/compliance_discovery.py`'s Stage 2 search fallback and the security-contact discovery stage now call the Tavily Search API instead of Google Custom Search. No credit card required at signup; response shape maps near 1:1 onto the old `title`/`link`/`snippet` contract, so no downstream consumer changed
+- **Quota model: daily → monthly** — Tavily's free tier is 1,000 credits/month (vs Google's 100/day). `services/quota.py`'s `SearchQuotaUsage` row now keys on `YYYY-MM` instead of `YYYY-MM-DD` — no schema migration needed, since the column was always a plain string primary key. `/api/quota`'s response shape is unchanged, so the frontend needed no changes beyond the banner's copy
+- **Reserve/refund race fix** — `consume_search_units`/`refund_search_units` now accept an explicit `period` pinned once at reservation time (`current_quota_period()`), so a request that straddles a month boundary can't reserve against one month and refund into the next
+- **Nightly scan: Modal Cron added alongside APScheduler** — `backend/modal_app.py` runs the same per-vendor scan loop as `scheduler.py`'s `scheduled_scan`, on a fixed-wall-clock Modal Cron schedule instead of "24h after the app last started." An `ENABLE_LEGACY_NIGHTLY_SCAN` flag keeps the original APScheduler job as the active path until the Modal cron has held clean for a few nights, at which point the legacy job (and the `SchedulerLease` model it needed for multi-instance safety) will be removed in a follow-up commit
+- **Verified live** — a real-vendor Modal run confirmed the quota consumed correctly under the new monthly model, Tavily search located an externally-attested cert, and the quoted-phrase security-contact query still resolves against Tavily's index
+
+Verification after this pass:
+
+- `python -m pytest -q` → `81 passed`
+- `npm run build` → passed
+- Live Modal run against a real production vendor, end to end
+
+---
+
 ## v4.0 — Scan Efficiency, Persistent Quota, and UX Polish
 
 v4.0 is a full product-quality release that improves scan economics, persistence, compliance discovery coverage, and the day-to-day UX of the dashboard and vendor analysis flow.

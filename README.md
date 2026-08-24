@@ -2,10 +2,10 @@
 
 > **Still running annual vendor audits? Your next breach won't wait 12 months.**
 
-[![Live Beta - v4.6](https://img.shields.io/badge/Live%20Demo-venderscope.vercel.app-6366f1?style=for-the-badge)](https://venderscope.vercel.app)
+[![Live Beta - v4.7](https://img.shields.io/badge/Live%20Demo-venderscope.vercel.app-6366f1?style=for-the-badge)](https://venderscope.vercel.app)
 [![API](https://img.shields.io/badge/API-darkitowo--venderscope--api.hf.space-10b981?style=for-the-badge)](https://darkitowo-venderscope-api.hf.space/docs)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Zarak%20Hassan-0A66C2?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/zarak-hassan7/)
-[![Version](https://img.shields.io/badge/version-v4.6-violet?style=for-the-badge)](https://github.com/darkyzowo/venderscope/releases)
+[![Version](https://img.shields.io/badge/version-v4.7-violet?style=for-the-badge)](https://github.com/darkyzowo/venderscope/releases)
 
 > **Performance note:** VenderScope backend runs on Hugging Face Spaces (Docker, 2vCPU/16GB RAM). Free-tier Spaces still idle-sleep on inactivity — UptimeRobot pings every 5 minutes to minimize that, but a cold boot (~30–50s) can still happen after a gap in traffic or an HF-side restart. Actual scan time once warm is 8–15s using concurrent API calls to HIBP, NVD, Companies House, Shodan, and the compliance engine simultaneously.
 
@@ -13,21 +13,16 @@ VenderScope is a continuous, passive vendor risk intelligence platform built for
 
 ---
 
-## Latest Release — v4.6: Tavily Web Search & Modal Cron Scan
+## Latest Release — v4.7: Per-Scan Search Quota Ceiling
 
-Google Custom Search JSON API started 403ing on every request even with the API enabled and a correctly-scoped key — root cause traced to Google's undocumented billing-account requirement, which broke the goal of keeping this build genuinely no-cost. Compliance web search was swapped to Tavily. Separately, the nightly vendor scan gained a second, more reliable scheduling path via Modal's native Cron.
+Live production testing on v4.6 (real vendor scans through the hosted app, not just Modal) surfaced a fairness gap: nothing capped how many Tavily units a *single* scan could spend. Worst case — 6 certs × up to 4 query templates, plus 7 security-contact prefixes — was ~21 units for one vendor, not the ~6 `ESTIMATED_SCAN_COST` assumed. Combined with no per-user vendor cap, a vendor-heavy account calling `scan-all` at its rate-limit ceiling could exhaust the entire shared monthly Tavily budget in minutes, locking search out for every user until the next reset.
 
-- **Compliance web search: Google CSE → Tavily** — `services/compliance_discovery.py`'s Stage 2 search fallback and the security-contact discovery stage now call the Tavily Search API instead of Google Custom Search. No credit card required at signup; response shape maps near 1:1 onto the old `title`/`link`/`snippet` contract, so no downstream consumer changed
-- **Quota model: daily → monthly** — Tavily's free tier is 1,000 credits/month (vs Google's 100/day). `services/quota.py`'s `SearchQuotaUsage` row now keys on `YYYY-MM` instead of `YYYY-MM-DD` — no schema migration needed, since the column was always a plain string primary key. `/api/quota`'s response shape is unchanged, so the frontend needed no changes beyond the banner's copy
-- **Reserve/refund race fix** — `consume_search_units`/`refund_search_units` now accept an explicit `period` pinned once at reservation time (`current_quota_period()`), so a request that straddles a month boundary can't reserve against one month and refund into the next
-- **Nightly scan: Modal Cron added alongside APScheduler** — `backend/modal_app.py` runs the same per-vendor scan loop as `scheduler.py`'s `scheduled_scan`, on a fixed-wall-clock Modal Cron schedule instead of "24h after the app last started." An `ENABLE_LEGACY_NIGHTLY_SCAN` flag keeps the original APScheduler job as the active path until the Modal cron has held clean for a few nights, at which point the legacy job (and the `SchedulerLease` model it needed for multi-instance safety) will be removed in a follow-up commit
-- **Verified live** — a real-vendor Modal run confirmed the quota consumed correctly under the new monthly model, Tavily search located an externally-attested cert, and the quoted-phrase security-contact query still resolves against Tavily's index
+- **`MAX_SEARCH_UNITS_PER_SCAN = 6`** — `services/compliance_discovery.py`'s `_web_search()` now stops issuing further Tavily calls once a single `run_compliance_discovery()` invocation has net-spent 6 units, reusing the existing `quota_state["used"]` counter (no new state). Matches `ESTIMATED_SCAN_COST`, so the "estimated full scans remaining" figure now reflects a real ceiling instead of an average
+- **Global exhaustion stays separate** — the per-scan cap only returns `[]` early; it never touches `quota_state["enabled"]`/`["exhausted"]`, so the quota banner still means what it says (true monthly exhaustion, not one scan hitting its own cap)
 
 Verification after this pass:
 
-- `python -m pytest -q` → `81 passed`
-- `npm run build` → passed
-- Live Modal run against a real production vendor, end to end
+- `python -m pytest -q` → `82 passed`
 
 Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 
@@ -306,7 +301,7 @@ Top 5 events by severity are averaged, multiplied by a count factor (up to 1.4×
 
 **Stage 1 — Page discovery + scrape (free):** Fetches the vendor homepage, probes known legal/security paths, inspects sitemap URLs, follows relevant same-site trust/legal/privacy/DPA links, and searches the collected vendor-owned pages for ISO 27001, SOC 2, GDPR, Cyber Essentials, PCI DSS, and Data Processing Agreement evidence.
 
-**Stage 2 — Web search fallback (costs Tavily quota):** For certifications or security contacts not confirmed on the vendor's own pages, fires targeted Tavily search queries to find external evidence. Quota is consumed incrementally per actual query rather than per scan.
+**Stage 2 — Web search fallback (costs Tavily quota):** For certifications or security contacts not confirmed on the vendor's own pages, fires targeted Tavily search queries to find external evidence. Quota is consumed incrementally per actual query rather than per scan, capped at 6 units per single scan (`MAX_SEARCH_UNITS_PER_SCAN`) so no one scan — or a burst of them — can exhaust the shared monthly budget.
 
 ### Third-Party Attribution Detection
 

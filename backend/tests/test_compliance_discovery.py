@@ -98,6 +98,30 @@ def test_web_search_normalizes_tavily_response_shape(monkeypatch):
     assert result == [{"title": "Vendor SOC 2 Report", "link": "https://vendor.com/trust", "snippet": "SOC 2 Type II attestation"}]
 
 
+def test_web_search_stops_at_per_scan_unit_cap(monkeypatch):
+    consumed = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"results": [{"title": "t", "url": "u", "content": "c"}]}
+
+    monkeypatch.setattr(compliance, "search_is_configured", lambda: True)
+    monkeypatch.setattr(compliance, "consume_search_units", lambda units=1, period=None: consumed.append(units) or True)
+    monkeypatch.setenv("TAVILY_API_KEY", "key")
+    monkeypatch.setattr(compliance.requests, "post", lambda *args, **kwargs: FakeResponse())
+
+    quota_state = {"enabled": True, "used": compliance.MAX_SEARCH_UNITS_PER_SCAN, "exhausted": False}
+    result = compliance._web_search("vendor soc2", quota_state)
+
+    assert result == []
+    assert consumed == []  # capped before a unit is ever reserved
+    assert quota_state["enabled"] is True  # per-scan cap, not global exhaustion
+    assert quota_state["exhausted"] is False
+
+
 def test_extract_relevant_links_stays_on_vendor_site():
     html = """
         <a href="/security">Security</a>

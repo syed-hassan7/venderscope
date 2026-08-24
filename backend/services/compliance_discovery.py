@@ -141,6 +141,16 @@ SECURITY_EMAIL_PREFIXES = ["security", "privacy", "dpo", "compliance", "legal", 
 
 MAX_RESPONSE_BYTES = 1_048_576  # 1 MB — prevents oversized pages from spiking RSS
 
+# Hard cap on net Tavily units one run_compliance_discovery() call (one vendor,
+# one scan) can spend. Worst case without this — 6 certs x up to 4 query
+# templates each, plus 7 security-contact prefixes — is ~21 units for a single
+# vendor, not the ~6 ESTIMATED_SCAN_COST assumes. Without a per-scan ceiling,
+# a handful of scan-all calls on a vendor-heavy account could burn the entire
+# shared monthly Tavily budget in minutes. Matches ESTIMATED_SCAN_COST
+# (services/quota.py) so the "estimated full scans remaining" figure it drives
+# reflects a real ceiling, not an average.
+MAX_SEARCH_UNITS_PER_SCAN = 6
+
 RELEVANT_PAGE_HINTS = [
     "trust", "security", "privacy", "legal", "compliance", "gdpr",
     "dpa", "data-processing", "data-processing-agreement", "data-processing-addendum",
@@ -468,6 +478,8 @@ def _web_search(query: str, quota_state: dict | None = None) -> list[dict]:
     period = None
     if quota_state is not None:
         if not quota_state.get("enabled", True):
+            return []
+        if quota_state.get("used", 0) >= MAX_SEARCH_UNITS_PER_SCAN:
             return []
         period = current_quota_period()
         if not consume_search_units(1, period=period):
