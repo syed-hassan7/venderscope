@@ -2,10 +2,10 @@
 
 > **Still running annual vendor audits? Your next breach won't wait 12 months.**
 
-[![Live Beta - v4.5](https://img.shields.io/badge/Live%20Demo-venderscope.vercel.app-6366f1?style=for-the-badge)](https://venderscope.vercel.app)
+[![Live Beta - v4.6](https://img.shields.io/badge/Live%20Demo-venderscope.vercel.app-6366f1?style=for-the-badge)](https://venderscope.vercel.app)
 [![API](https://img.shields.io/badge/API-darkitowo--venderscope--api.hf.space-10b981?style=for-the-badge)](https://darkitowo-venderscope-api.hf.space/docs)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Zarak%20Hassan-0A66C2?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/zarak-hassan7/)
-[![Version](https://img.shields.io/badge/version-v4.5-violet?style=for-the-badge)](https://github.com/darkyzowo/venderscope/releases)
+[![Version](https://img.shields.io/badge/version-v4.6-violet?style=for-the-badge)](https://github.com/darkyzowo/venderscope/releases)
 
 > **Performance note:** VenderScope backend runs on Hugging Face Spaces (Docker, 2vCPU/16GB RAM). Free-tier Spaces still idle-sleep on inactivity — UptimeRobot pings every 5 minutes to minimize that, but a cold boot (~30–50s) can still happen after a gap in traffic or an HF-side restart. Actual scan time once warm is 8–15s using concurrent API calls to HIBP, NVD, Companies House, Shodan, and the compliance engine simultaneously.
 
@@ -46,6 +46,24 @@ Render free tier compute hours were exhausted (191.9h/month depleted in ~8 days 
 - **Keep-alive:** UptimeRobot pings `https://darkitowo-venderscope-api.hf.space/` every 5 minutes — prevents HF sleep and keeps APScheduler alive
 - **`is_production()` generalised:** No longer keys on the `RENDER` env var; now uses `ENV=production` for portability across any host
 - **SSL fix for Supabase pooler:** `database.py` disables certificate hostname verification (`ssl.CERT_NONE`) to accommodate Supabase's self-signed certificate in the pooler chain while retaining SSL encryption
+
+---
+
+## What's New in v4.6 — Tavily Web Search & Modal Cron Scan
+
+Google Custom Search JSON API started 403ing on every request even with the API enabled and a correctly-scoped key — root cause traced to Google's undocumented billing-account requirement, which broke the goal of keeping this build genuinely no-cost. Compliance web search was swapped to Tavily. Separately, the nightly vendor scan gained a second, more reliable scheduling path via Modal's native Cron.
+
+- **Compliance web search: Google CSE → Tavily** — `services/compliance_discovery.py`'s Stage 2 search fallback and the security-contact discovery stage now call the Tavily Search API instead of Google Custom Search. No credit card required at signup; response shape maps near 1:1 onto the old `title`/`link`/`snippet` contract, so no downstream consumer changed
+- **Quota model: daily → monthly** — Tavily's free tier is 1,000 credits/month (vs Google's 100/day). `services/quota.py`'s `SearchQuotaUsage` row now keys on `YYYY-MM` instead of `YYYY-MM-DD` — no schema migration needed, since the column was always a plain string primary key. `/api/quota`'s response shape is unchanged, so the frontend needed no changes beyond the banner's copy
+- **Reserve/refund race fix** — `consume_search_units`/`refund_search_units` now accept an explicit `period` pinned once at reservation time (`current_quota_period()`), so a request that straddles a month boundary can't reserve against one month and refund into the next
+- **Nightly scan: Modal Cron added alongside APScheduler** — `backend/modal_app.py` runs the same per-vendor scan loop as `scheduler.py`'s `scheduled_scan`, on a fixed-wall-clock Modal Cron schedule instead of "24h after the app last started." An `ENABLE_LEGACY_NIGHTLY_SCAN` flag keeps the original APScheduler job as the active path until the Modal cron has held clean for a few nights, at which point the legacy job (and the `SchedulerLease` model it needed for multi-instance safety) will be removed in a follow-up commit
+- **Verified live** — a real-vendor Modal run confirmed the quota consumed correctly under the new monthly model, Tavily search located an externally-attested cert, and the quoted-phrase security-contact query still resolves against Tavily's index
+
+Verification after this pass:
+
+- `python -m pytest -q` → `81 passed`
+- `npm run build` → passed
+- Live Modal run against a real production vendor, end to end
 
 ---
 
@@ -270,9 +288,9 @@ A full security audit was conducted before guest mode launch. Findings resolved:
 - **UK-Native Governance** — Companies House integration flags financial distress, overdue filings, and director changes
 - **Exposed Infrastructure Detection** — Shodan flags dangerous open ports (RDP, SMB, MongoDB, etc.)
 - **24hr Intelligent Caching** — Repeat scans return instantly; nightly scheduler forces fresh data overnight
-- **Two-Stage Compliance Discovery** — Scrapes vendor pages for ISO 27001, SOC 2, GDPR, Cyber Essentials, PCI DSS evidence; Google CSE fallback when direct scraping is insufficient
+- **Two-Stage Compliance Discovery** — Scrapes vendor pages for ISO 27001, SOC 2, GDPR, Cyber Essentials, PCI DSS evidence; Tavily search fallback when direct scraping is insufficient
 - **Verified Security Contacts** — Finds security/privacy contacts via RFC 9116 `security.txt`, page scraping, and web search
-- **Scan Quota Tracker** — Live banner showing remaining Google CSE quota with automatic daily reset
+- **Scan Quota Tracker** — Live banner showing remaining Tavily search quota with automatic monthly reset
 - **Client-side Vendor Logos** — Vendor avatars attempt to load the vendor site's favicon/logo before falling back to the deterministic gradient monogram
 
 ### GRC Workflow (v3.6)
@@ -293,7 +311,7 @@ A full security audit was conducted before guest mode launch. Findings resolved:
 | Authentication| JWT (python-jose), bcrypt, httpOnly cookies                                  |
 | Frontend      | React 19, Vite 8, React Router 7, TailwindCSS 3, Axios                      |
 | Intelligence  | HIBP API, NVD/NIST API, Companies House API, Shodan API                      |
-| Compliance    | Google Custom Search API, BeautifulSoup4, security.txt                       |
+| Compliance    | Tavily Search API, BeautifulSoup4, security.txt                             |
 | Email         | Resend HTTP API (production) / Gmail SMTP (local dev)                        |
 | PDF Export    | ReportLab                                                                    |
 | Rate Limiting | SlowAPI                                                                      |
@@ -308,7 +326,7 @@ A full security audit was conducted before guest mode launch. Findings resolved:
 | **NVD (NIST)**      | CVEs associated with vendor products and services                            |
 | **Companies House** | UK company status, overdue filings, director resignations                    |
 | **Shodan**          | Exposed ports and services on vendor infrastructure                          |
-| **Google CSE**      | External certification evidence for ISO 27001, SOC 2, DPA, and more         |
+| **Tavily**          | External certification evidence for ISO 27001, SOC 2, DPA, and more         |
 | **Vendor Profile**  | Homepage meta description, auth method, and 2FA support (passive scrape)    |
 
 ---
@@ -339,7 +357,7 @@ VenderScope/
 │       ├── alerts.py             # Resend HTTP API + Gmail SMTP dispatcher
 │       ├── compliance_discovery.py  # Two-stage compliance + cert discovery
 │       ├── vendor_profile.py     # Passive vendor description, auth & 2FA discovery
-│       ├── quota.py              # DB-backed global Google CSE quota tracker
+│       ├── quota.py              # DB-backed global Tavily quota tracker
 │       ├── hibp.py               # HIBP breach intelligence
 │       ├── nvd.py                # NVD CVE intelligence
 │       ├── companies_house.py    # UK governance checks
@@ -378,7 +396,7 @@ VenderScope/
 
 - Python 3.11+
 - Node.js 18+
-- API keys for: NVD, Companies House, Shodan, Google Custom Search
+- API keys for: NVD, Companies House, Shodan, Tavily
 
 ### Backend
 
@@ -394,8 +412,7 @@ Create `backend/.env`:
 NVD_API_KEY=your_key
 COMPANIES_HOUSE_API_KEY=your_key
 SHODAN_API_KEY=your_key
-GOOGLE_CSE_API_KEY=your_key
-GOOGLE_CSE_ID=your_cse_id
+TAVILY_API_KEY=your_key
 
 # Email (local: Gmail SMTP; production: Resend with verified domain)
 GMAIL_ADDRESS=your@gmail.com
@@ -507,7 +524,7 @@ Top 5 events by severity are averaged, multiplied by a count factor (up to 1.4×
 
 **Stage 1 — Page discovery + scrape (free):** Fetches the vendor homepage, probes known legal/security paths, inspects sitemap URLs, follows relevant same-site trust/legal/privacy/DPA links, and searches the collected vendor-owned pages for ISO 27001, SOC 2, GDPR, Cyber Essentials, PCI DSS, and Data Processing Agreement evidence.
 
-**Stage 2 — Web search fallback (costs Google CSE quota):** For certifications or security contacts not confirmed on the vendor's own pages, fires targeted Google Custom Search queries to find external evidence. Quota is consumed incrementally per actual query rather than per scan.
+**Stage 2 — Web search fallback (costs Tavily quota):** For certifications or security contacts not confirmed on the vendor's own pages, fires targeted Tavily search queries to find external evidence. Quota is consumed incrementally per actual query rather than per scan.
 
 ### Third-Party Attribution Detection
 
@@ -522,7 +539,7 @@ VenderScope detects a common false positive — vendors referencing their *infra
 
 ### Scan Quota
 
-Google Custom Search allows 100 free queries/day. VenderScope now tracks this quota in the database, consumes units only when an external web search actually happens, and refunds units when a Google request fails before a successful result is returned. In practice, that means many scans cost far less than the old worst-case model. When quota is exhausted, scans automatically fall back to Standard Scan (vendor-site discovery only). Quota resets at midnight UTC.
+Tavily's free tier allows 1,000 credits/month, no card required. VenderScope tracks this quota in the database, consumes units only when an external web search actually happens, and refunds units when a request fails before a successful result is returned. In practice, that means many scans cost far less than the old worst-case model. When quota is exhausted, scans automatically fall back to Standard Scan (vendor-site discovery only). Quota resets on the 1st of the month, UTC.
 
 ---
 
@@ -542,7 +559,7 @@ During every scan, VenderScope passively discovers three data points at no quota
 
 **HF Space sleep:** Hugging Face Spaces sleep after 48 hours of zero traffic. UptimeRobot pings every 5 minutes keep the space warm in practice. If the space does sleep, first request triggers a ~30s cold start.
 
-**JS-rendered trust centres:** Vendors using Vanta or similar platforms load certifications dynamically. VenderScope's scraper fetches raw HTML and relies on the Google CSE fallback for these.
+**JS-rendered trust centres:** Vendors using Vanta or similar platforms load certifications dynamically. VenderScope's scraper fetches raw HTML and relies on the Tavily search fallback for these.
 
 **Email alerts in production:** Render's free tier blocks outbound SMTP. Resend HTTP API is wired up and ready — it activates automatically once a verified sending domain is configured in `RESEND_FROM_EMAIL`. Until then, alerts are skipped in production and delivered locally via Gmail SMTP.
 
@@ -562,10 +579,10 @@ During every scan, VenderScope passively discovers three data points at no quota
 - [x] 24hr intelligent caching + nightly scheduler
 - [x] Concurrent API fetching
 - [x] Compliance posture auto-discovery
-- [x] Two-stage certification detection (scrape + Google CSE)
+- [x] Two-stage certification detection (scrape + Tavily search)
 - [x] Third-party certification attribution detection
 - [x] Verified security contact discovery
-- [x] Daily scan quota tracker
+- [x] Monthly scan quota tracker
 - [x] Vendor profile auto-discovery
 - [x] Full JWT authentication (v3)
 - [x] Per-user vendor isolation (v3)
@@ -628,8 +645,7 @@ ENV                 production
 NVD_API_KEY
 COMPANIES_HOUSE_API_KEY
 SHODAN_API_KEY
-GOOGLE_CSE_API_KEY
-GOOGLE_CSE_ID
+TAVILY_API_KEY
 GMAIL_ADDRESS       (optional — local email fallback)
 GMAIL_APP_PASSWORD  (optional)
 EMAIL_ENABLED       1 (set to 0 to disable all outbound email)

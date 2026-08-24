@@ -83,7 +83,7 @@ Guest mode was introduced in v3.5 with security as the primary design constraint
 - Database encrypted at rest (PostgreSQL on Neon)
 - No sensitive data stored in application logs
 - Secrets managed via environment variables — never committed to source code
-- Google Custom Search quota usage is persisted in the database and survives restarts/redeploys
+- Tavily search quota usage is persisted in the database and survives restarts/redeploys
 
 ### Server-Side Request Forgery (SSRF) Protection
 All outbound HTTP requests to user-supplied or externally-sourced domains are validated against:
@@ -100,10 +100,10 @@ Redirect chains are followed manually (max 3 hops) — each intermediate destina
 DNS resolution is performed and the resolved IP is checked, not just the hostname — prevents DNS rebinding attacks.
 
 ### Search Quota Enforcement
-- Google Custom Search usage is capped to the configured free-tier budget
+- Tavily usage is capped to the configured free-tier budget
 - Quota state is stored in the database, not local disk, so it survives Render restarts
-- Quota consumption is serialized against the daily row to reduce concurrent oversubscription risk
-- Search units are refunded when a Google CSE request fails before a successful 200 response
+- Quota consumption is serialized against the monthly row to reduce concurrent oversubscription risk
+- Search units are refunded when a Tavily request fails before a successful 200 response
 - When search quota is exhausted, scans fall back to vendor-site discovery rather than failing outright
 
 ### Background Job Safety
@@ -215,7 +215,7 @@ Full technical detail in `tasks/security-architecture.md`.
 
 - **Email alerts:** Currently use SMTP in development. Production deployments should configure Resend (HTTP API) via the `RESEND_API_KEY` environment variable once a verified sending domain is available.
 - **Rate limiting on Render free tier:** Rate limits are enforced per real client IP via `XFF[-1]`. Render free tier does not offer a fixed load balancer IP, so `--forwarded-allow-ips="*"` is required — a motivated attacker with control of an upstream proxy could theoretically influence the XFF chain. This is a known Render free-tier architectural constraint.
-- **Global search budget:** Google CSE quota is enforced globally for the app today, not per-user. Per-user daily budgets are planned as a future layer on top of the new DB-backed global quota.
+- **Global search budget:** Tavily quota is enforced globally for the app today, not per-user. Per-user budgets are planned as a future layer on top of the new DB-backed global quota.
 - **Self-hosted deployments:** Security of self-hosted instances is the responsibility of the operator.
 
 ---

@@ -20,10 +20,10 @@ export default function QuotaBanner() {
       </svg>
 
       <span style={{ color: 'var(--mid)' }}>
-        Compliance web search uses Google CSE —{' '}
-        <span style={{ color: 'var(--accent-l)', fontWeight: 500 }}>100 queries/day</span>
+        Compliance web search uses Tavily —{' '}
+        <span style={{ color: 'var(--accent-l)', fontWeight: 500 }}>1,000 credits/month</span>
         <span className="hidden sm:inline" style={{ color: 'var(--lo)' }}>
-          {' '}· ~16 full scans · resets midnight UTC
+          {' '}· ~166 full scans · resets 1st of month UTC
         </span>
       </span>
 

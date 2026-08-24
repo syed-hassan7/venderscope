@@ -6,7 +6,7 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, unquote, urlparse, urlunparse
-from services.quota import consume_search_units, refund_search_units, search_is_configured
+from services.quota import consume_search_units, refund_search_units, search_is_configured, current_quota_period
 
 # ── SSRF protection ────────────────────────────────────────────────────────────
 BLOCKED_PATTERNS = [
@@ -459,38 +459,43 @@ def _scrape_stage(full_text: str) -> dict:
     return results
 
 
-def _google_search(query: str, quota_state: dict | None = None) -> list[dict]:
-    """Fires a single Google Custom Search query. Returns [] on failure or missing keys."""
+def _web_search(query: str, quota_state: dict | None = None) -> list[dict]:
+    """Fires a single Tavily search query. Returns [] on failure or missing key."""
     if not search_is_configured():
         return []
 
     reserved_unit = False
+    period = None
     if quota_state is not None:
         if not quota_state.get("enabled", True):
             return []
-        if not consume_search_units(1):
+        period = current_quota_period()
+        if not consume_search_units(1, period=period):
             quota_state["enabled"] = False
             quota_state["exhausted"] = True
             return []
         reserved_unit = True
 
-    api_key = os.getenv("GOOGLE_CSE_API_KEY")
-    cse_id = os.getenv("GOOGLE_CSE_ID")
+    api_key = os.getenv("TAVILY_API_KEY")
     try:
-        r = requests.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params={"key": api_key, "cx": cse_id, "q": query, "num": 5},
+        r = requests.post(
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"query": query, "max_results": 5, "chunks_per_source": 1},
             timeout=8,
         )
         if r.status_code == 200:
             if quota_state is not None and reserved_unit:
                 quota_state["used"] = quota_state.get("used", 0) + 1
-            return r.json().get("items", [])
-        print(f"[Google CSE] {r.status_code}: {r.text[:300]}")
+            return [
+                {"title": item.get("title", ""), "link": item.get("url", ""), "snippet": item.get("content", "")}
+                for item in r.json().get("results", [])
+            ]
+        print(f"[Tavily] {r.status_code}: {r.text[:300]}")
     except Exception as e:
-        print(f"[Google CSE] Request failed: {e}")
+        print(f"[Tavily] Request failed: {e}")
     if reserved_unit:
-        refund_search_units(1)
+        refund_search_units(1, period=period)
     return []
 
 
@@ -511,7 +516,7 @@ def _result_is_credible(items: list[dict], cert_keywords: list[str]) -> dict | N
 
 def _web_search_stage(vendor_name: str, domain: str, scrape_results: dict, quota_state: dict | None = None) -> dict:
     """
-    Stage 2 — Google search fallback.
+    Stage 2 — web search fallback (Tavily).
     - "found"       → already confirmed on-site, skip search.
     - "third_party" → run search to try to find direct cert evidence; if search
                       also only surfaces third-party attribution, preserve that status.
@@ -530,7 +535,7 @@ def _web_search_stage(vendor_name: str, domain: str, scrape_results: dict, quota
         for q_template in queries:
             query = q_template.format(name=vendor_name, domain=base)
             print(f"[Compliance] Web search: {query}")
-            items = _google_search(query, quota_state)
+            items = _web_search(query, quota_state)
             match = _result_is_credible(items, CERT_KEYWORDS[cert])
             if match:
                 break
@@ -563,7 +568,7 @@ def _find_security_contact(domain: str, scraped_pages: list[str], use_web_search
     """
     1. Check security.txt (RFC 9116) — most authoritative.
     2. Scrape already-fetched pages for emails matching known prefixes.
-    3. Google CSE fallback (only if use_web_search=True).
+    3. Web search fallback (only if use_web_search=True).
     Never fabricates — only returns confirmed findings.
     """
     base = domain.replace("https://", "").replace("http://", "").rstrip("/")
@@ -583,11 +588,11 @@ def _find_security_contact(domain: str, scraped_pages: list[str], use_web_search
         if re.search(pattern, combined, re.IGNORECASE):
             return {"email": f"{prefix}@{base}", "verified": True, "source": "site"}
 
-    # Stage 3 — Google CSE fallback (skipped if quota exhausted)
+    # Stage 3 — web search fallback (skipped if quota exhausted)
     if use_web_search:
         for prefix in SECURITY_EMAIL_PREFIXES:
             query = f'"{prefix}@{base}"'
-            items = _google_search(query)
+            items = _web_search(query)
             for item in items:
                 text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
                 if f"{prefix}@{base}" in text:
@@ -602,7 +607,7 @@ def _find_security_contact_with_quota(
     quota_state: dict | None = None,
 ) -> dict | None:
     """
-    Same as _find_security_contact but consumes Google CSE quota incrementally when needed.
+    Same as _find_security_contact but consumes search quota incrementally when needed.
     """
     base = domain.replace("https://", "").replace("http://", "").rstrip("/")
 
@@ -622,7 +627,7 @@ def _find_security_contact_with_quota(
     if quota_state is not None and quota_state.get("enabled", True):
         for prefix in SECURITY_EMAIL_PREFIXES:
             query = f'"{prefix}@{base}"'
-            items = _google_search(query, quota_state)
+            items = _web_search(query, quota_state)
             for item in items:
                 text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
                 if f"{prefix}@{base}" in text:
@@ -635,7 +640,7 @@ def run_compliance_discovery(domain: str, vendor_name: str = "", use_web_search:
     """
     Main entry point. Two-stage cert discovery:
       1. Keyword scrape of vendor's own pages (always runs)
-      2. Google CSE web search fallback (skipped when use_web_search=False / quota exhausted)
+      2. Web search fallback (skipped when use_web_search=False / quota exhausted)
     """
     if not _is_safe_domain(domain):
         print(f"[Compliance] Blocked unsafe domain: {domain}")

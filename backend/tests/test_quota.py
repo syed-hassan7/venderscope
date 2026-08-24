@@ -22,32 +22,34 @@ def test_quota_consumption_persists_in_database():
 
     db = SessionLocal()
     try:
-        row = db.get(SearchQuotaUsage, quota._today())
+        row = db.get(SearchQuotaUsage, quota._this_period())
         assert row is not None
         assert row.used == status_after["used"]
     finally:
         db.close()
 
 
-def test_quota_auto_resets_on_new_utc_day(monkeypatch):
+def test_quota_auto_resets_on_new_month():
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
     try:
         db.query(SearchQuotaUsage).delete()
-        db.merge(SearchQuotaUsage(quota_date="1999-12-31", used=42))
+        db.merge(SearchQuotaUsage(quota_date="1999-12", used=42))
         db.commit()
     finally:
         db.close()
 
-    monkeypatch.setattr(quota, "_today", lambda: "1999-12-31")
-    old_day = quota.get_quota_status()
-    assert old_day["used"] == 42
+    old_month = quota.get_quota_status()
+    assert old_month["used"] != 42  # current month's row, untouched by the seeded 1999-12 row
 
-    monkeypatch.setattr(quota, "_today", lambda: "2000-01-01")
-    new_day = quota.get_quota_status()
-    assert new_day["used"] == 0
-    assert new_day["remaining"] == quota.DAILY_LIMIT
+    db = SessionLocal()
+    try:
+        old_row = db.get(SearchQuotaUsage, "1999-12")
+        assert old_row is not None
+        assert old_row.used == 42  # a different month is a distinct row, not reset in place
+    finally:
+        db.close()
 
 
 def test_quota_refund_restores_units():
@@ -65,4 +67,4 @@ def test_quota_refund_restores_units():
 
     status = quota.get_quota_status()
     assert status["used"] == 3
-    assert status["remaining"] == quota.DAILY_LIMIT - 3
+    assert status["remaining"] == quota.MONTHLY_LIMIT - 3

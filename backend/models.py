@@ -85,10 +85,10 @@ class RevokedToken(Base):
 
 
 class SearchQuotaUsage(Base):
-    """Authoritative daily Google CSE quota usage, persisted in the database."""
+    """Authoritative monthly Tavily search-quota usage, persisted in the database."""
     __tablename__ = "search_quota_usage"
 
-    quota_date = Column(String(10), primary_key=True)  # YYYY-MM-DD in UTC
+    quota_date = Column(String(10), primary_key=True)  # YYYY-MM in UTC (column name kept for zero-migration compat)
     used       = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 

@@ -121,7 +121,7 @@ VenderScope is provided on a best-effort basis. We do not guarantee 100% uptime.
 We may modify, suspend, or discontinue any part of VenderScope at any time. We will provide reasonable notice for material changes where possible.
 
 ### 10.3 API Quotas
-External API quotas (particularly Google Custom Search Engine: 100 units/day on the free tier) are shared resources. During high-demand periods, full scans may not be available.
+External API quotas (particularly the Tavily search API: 1,000 credits/month on the free tier) are shared resources. When exhausted, scans continue using vendor-site discovery and other intelligence sources — only the external search step used for certification/security-contact verification is skipped until quota resets.
 
 ---
 
