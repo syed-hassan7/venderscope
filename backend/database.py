@@ -30,11 +30,20 @@ else:
                if k not in ("sslmode", "channel_binding")}
     DATABASE_URL = urlunparse(_parsed._replace(query=urlencode(_params)))
 
-    # Supabase Session Pooler uses a self-signed cert not in any standard CA bundle.
-    # CERT_NONE: cert authenticity unverified, but connection is still TLS-encrypted.
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
+    # Supabase's pooler cert isn't in any standard CA bundle — pin Supabase's own
+    # CA (download "prod-ca-2021.crt" from Project Settings > Database > SSL
+    # Configuration in the Supabase dashboard) instead of disabling verification.
+    _ca_path = os.getenv("SUPABASE_CA_CERT_PATH")
+    if not _ca_path:
+        raise RuntimeError(
+            "SUPABASE_CA_CERT_PATH is not set. Download the Supabase CA cert "
+            "(prod-ca-2021.crt) from Project Settings > Database > SSL Configuration "
+            "and point this env var at it — required for verified TLS to a non-sqlite "
+            "DATABASE_URL. Refusing to fall back to unverified TLS."
+        )
+    _ssl_ctx = ssl.create_default_context(cafile=_ca_path)
+    _ssl_ctx.check_hostname = True
+    _ssl_ctx.verify_mode = ssl.CERT_REQUIRED
     _connect_args = {"ssl_context": _ssl_ctx}
 
 # Cloud PostgreSQL needs pre-ping to recover stale connections after idle periods
