@@ -233,7 +233,25 @@ def test_result_is_credible_rejects_lookalike_domain():
     assert result is None
 
 
-def test_result_is_credible_accepts_credible_domain_immediately():
+def test_result_is_credible_rejects_credible_domain_generic_overview():
+    # Real bug: ncsc.gov.uk and pcisecuritystandards.org are CREDIBLE_DOMAINS,
+    # but their own generic scheme-overview/blog pages never name any vendor.
+    # Credible-domain membership alone must not be treated as vendor evidence.
+    items = [{
+        "title": "Cyber Essentials Overview",
+        "link": "https://www.ncsc.gov.uk/cyberessentials/overview",
+        "snippet": "Cyber Essentials is a government-backed scheme to help protect your organisation.",
+    }]
+
+    result = compliance._result_is_credible(items, compliance.CERT_KEYWORDS["cyber_essentials"], "Jack and Jill", "jackandjill.ai")
+
+    assert result is None
+
+
+def test_result_is_credible_accepts_credible_domain_naming_vendor():
+    # Credible domain + an actual vendor-specific certificate page (names the
+    # vendor) is accepted — credible domain alone (see the rejection test
+    # above) is not.
     items = [{
         "title": "Vendor Co ISO 27001 Certificate",
         "link": "https://bsigroup.com/certificates/vendor-co-iso27001",

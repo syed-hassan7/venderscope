@@ -565,13 +565,17 @@ def _host_matches(link: str, domain: str) -> bool:
 
 
 def _is_vendor_relevant(item: dict, name: str, base: str) -> bool:
-    """True when a search result is actually tied to this vendor: a credible
-    certifying-body domain, the vendor's own domain, or the vendor's name
-    mentioned in the result text."""
+    """True when a search result actually mentions this vendor — the vendor's
+    own domain, or the vendor's name in the result text. Being on a credible
+    certifying-body domain is NOT sufficient on its own: bsigroup.com/
+    ncsc.gov.uk/pcisecuritystandards.org also publish generic scheme overviews
+    and blog posts that never name any specific vendor — those must still fail
+    this gate. (Credible-domain membership is used elsewhere, in
+    _is_junk_result, purely to exempt a real certificate/registry page from
+    the generic-content path/title reject list — it isn't a relevance signal
+    by itself.)"""
     link = item.get("link", "")
     text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
-    if any(_host_matches(link, d) for d in CREDIBLE_DOMAINS):
-        return True
     if _host_matches(link, base):
         return True
     name_tokens = [t for t in re.split(r"\W+", name.lower()) if len(t) > 2]
