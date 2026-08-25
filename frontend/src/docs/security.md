@@ -47,15 +47,24 @@ We ask that you:
 ## Our Security Practices
 
 ### Authentication
-- Passwords hashed with bcrypt (minimum 12 rounds)
+- **Passkeys (WebAuthn)** — phishing-resistant sign-in with user verification required; public keys and credential IDs stored server-side (never biometrics). Logged-in users can list and remove passkeys from Sign-in methods; the last passkey cannot be removed unless a password hash or Google remains (recovery codes do not count).
+- **Google Sign-In** — OAuth 2.0 with PKCE; `email_verified` required; no silent email-link to existing password accounts. New accounts require Google first (15-minute httpOnly `vs_google_pending` cookie), then a passkey; identity stored is `google_sub`. Unauthenticated WebAuthn signup begin/finish without that cookie returns 403. Google can be unlinked unless a password hash or a passkey remains.
+- **Recovery codes** — 10 one-time codes generated at passkey signup, shown once, stored hashed (HMAC-SHA256 + bcrypt). Recovery is a backup login, not a reason to drop the last passkey or unlink the last Google factor.
+- **Legacy passwords** — password **sign-in is closed**. Existing bcrypt hashes may still be used as step-up to add a passkey, link Google, or delete the account. New password registration remains closed.
+- Passwords hashed with bcrypt (minimum 12 rounds) where still used
 - JWT access tokens are short-lived (15 minutes) and stored in memory only — never in localStorage
 - Refresh tokens are 7-day single-use tokens stored in httpOnly, Secure, SameSite=None cookies — inaccessible to JavaScript
 - The refresh cookie is treated as a **strictly necessary security cookie**; optional-cookie consent does not disable authentication
 - Used refresh tokens are immediately invalidated (JTI blacklist) — each token can only be used once
-- Password reconfirmation required before permanent account deletion — protects against an attacker with a briefly obtained access token
-- CSRF origin validation on all cookie-consuming endpoints (refresh, logout, account deletion)
+- Reuse of a revoked refresh JTI increments `session_version` and kills the rest of that user's session family
+- Logout increments `session_version` so in-memory access JWTs fail immediately
+- Linking Google is POST `/api/auth/google/link/start` with a live access token plus passkey or password step-up
+- Adding a passkey while logged in requires the same step-up (except Google-only accounts adding their first passkey)
+- Step-up verification before permanent account deletion — password, recovery code, or passkey depending on registered factors
+- CSRF origin validation on cookie-consuming endpoints; refresh and logout reject requests with no Origin/Referer
 - Brute force protection on all authentication endpoints
 - Account enumeration prevention — login errors never reveal whether an email exists
+- Residual risk (honest): XSS can still steal the in-memory 15-minute access JWT. Google-only accounts adding their first passkey skip step-up. Hugging Face `X-Forwarded-For` hop order is not proven against live proxy headers.
 
 ### Cookie Consent
 - VenderScope presents a cookie consent banner and a footer-level **Cookie Settings** control
@@ -78,7 +87,7 @@ Guest mode was introduced in v3.5 with security as the primary design constraint
 - **CVE-only scope** — only the NIST NVD API is called. HIBP, Shodan, Companies House, compliance scraping, and vendor profiling are excluded
 - **Strict input validation** — Pydantic validators enforce length limits on all fields, a severity allowlist (CRITICAL/HIGH/MEDIUM/LOW), score range 0–100, and a maximum of 50 events per report request
 - **XML injection prevention** — every user-supplied string is passed through `_xml_escape()` before reaching ReportLab in PDF generation
-- **Rate limiting** — 3 scans/hour and 5 reports/hour per real client IP (XFF[-1], proxy-appended)
+- **Rate limiting** — 3 scans/hour and 5 reports/hour per client IP. Hop: `RATE_LIMIT_XFF_CLIENT=first|last`, else leftmost on HF Spaces (`SPACE_ID`/`SPACE_HOST`), else rightmost (legacy Render/direct). Leftmost is spoofable if the proxy forwards a client-supplied XFF prefix; hop order is not validated against live HF headers.
 - **No auth cookie consumed** — guest endpoints do not read or use the `vs_refresh` cookie
 
 ### Data in Transit
@@ -136,7 +145,7 @@ This provides browser-level XSS mitigation in addition to React's built-in outpu
 - Registration: 3 requests per hour per IP
 - Guest scan: 3 requests per hour per IP
 - Guest report: 5 requests per hour per IP
-- All limits enforced per real client IP — resolved from `X-Forwarded-For[-1]` (proxy-appended, unforgeable)
+- All limits enforced per client IP from `X-Forwarded-For`. Default leftmost on Hugging Face Spaces (`SPACE_ID`/`SPACE_HOST`), rightmost otherwise; override with `RATE_LIMIT_XFF_CLIENT=first|last`. `X-Real-IP` is unused unless `RATE_LIMIT_TRUST_X_REAL_IP=1`. Leftmost hop remains spoofable if HF forwards a client XFF prefix; live Space headers have not been captured.
 
 ### Audit Logging
 - All authentication events (login, logout, failed attempts, account deletion) are logged with IP and timestamp
@@ -232,7 +241,7 @@ Full technical detail in `tasks/security-architecture.md`.
 ## Known Limitations
 
 - **Email alerts:** Currently use SMTP in development. Production deployments should configure Resend (HTTP API) via the `RESEND_API_KEY` environment variable once a verified sending domain is available.
-- **Rate limiting on free-tier hosting:** Rate limits are enforced per real client IP via `XFF[-1]`. Hugging Face Spaces routes traffic through its own proxy layer, so `--forwarded-allow-ips="*"` is required on uvicorn — a motivated attacker with control of an upstream proxy could theoretically influence the XFF chain. This is a known free-tier hosting architectural constraint.
+- **Rate limiting on free-tier hosting:** Rate limits and audit IPs use the same hop selection as `_real_ip()`. Default leftmost on Hugging Face Spaces, rightmost otherwise; override with `RATE_LIMIT_XFF_CLIENT`. `--forwarded-allow-ips="*"` is required on uvicorn. Leftmost remains spoofable if HF forwards a client-supplied XFF prefix.
 - **Global search budget:** Tavily quota is enforced globally for the app today, not per-user. Per-user budgets are planned as a future layer on top of the new DB-backed global quota.
 - **Self-hosted deployments:** Security of self-hosted instances is the responsibility of the operator.
 

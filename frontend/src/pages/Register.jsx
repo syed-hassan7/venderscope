@@ -10,40 +10,44 @@ export default function Register() {
   const [searchParams] = useSearchParams()
 
   const [email, setEmail]       = useState(searchParams.get('email') || '')
+  const fromGoogle = searchParams.get('from') === 'google'
   const [recoveryCodes, setRecoveryCodes] = useState([])
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [visible, setVisible]   = useState(false)
   const [step, setStep]         = useState('email')
   const emailRef = useRef(null)
+  const holdForRecovery = useRef(false)
 
   useEffect(() => {
-    if (user) navigate('/', { replace: true })
-  }, [user, navigate])
+    if (user && !holdForRecovery.current && step !== 'recovery') {
+      navigate('/', { replace: true })
+    }
+  }, [user, navigate, step])
 
   useEffect(() => {
     requestAnimationFrame(() => requestAnimationFrame(() => setVisible(true)))
-    emailRef.current?.focus()
-  }, [])
+    if (fromGoogle) emailRef.current?.focus()
+  }, [fromGoogle])
 
   const handleCreatePasskey = async (e) => {
     e.preventDefault()
     setError('')
-    if (!email.trim()) {
-      setError('Enter your email address.')
-      return
-    }
     setLoading(true)
     try {
-      const data = await registerWithPasskey(email.trim())
+      holdForRecovery.current = true
+      const data = await registerWithPasskey()
       if (data.recovery_codes?.length) {
         setRecoveryCodes(data.recovery_codes)
         setStep('recovery')
       } else {
+        holdForRecovery.current = false
         navigate('/', { replace: true })
       }
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Registration failed. Please try again.')
+      holdForRecovery.current = false
+      const detail = err.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : (err.message || 'Registration failed. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -158,7 +162,7 @@ export default function Register() {
                 </button>
               </div>
             </div>
-          ) : (
+          ) : fromGoogle ? (
           <form onSubmit={handleCreatePasskey} method="post" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
             <div style={reveal(430)}>
@@ -170,12 +174,13 @@ export default function Register() {
                 placeholder="you@company.com"
                 autoComplete="email"
                 inputRef={emailRef}
+                readOnly
               />
             </div>
 
             <div style={reveal(510)}>
               <p style={{ fontSize: 12, color: 'var(--lo)', lineHeight: 1.5 }}>
-                New accounts use a passkey (Touch ID, Windows Hello, or device PIN). No password.
+                Google already verified this address. Create a passkey to finish — Google stays linked as an extra sign-in method.
               </p>
             </div>
 
@@ -242,13 +247,75 @@ export default function Register() {
                 type="button"
                 onClick={() => googleLoginStart()}
                 style={secondaryBtnStyle}
-                aria-label="Continue with Google"
+                aria-label="Start over with Google"
               >
-                Continue with Google
+                Start over with Google
               </button>
             </div>
 
           </form>
+          ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <p style={{ fontSize: 13, color: 'var(--mid)', lineHeight: 1.5, ...reveal(430) }}>
+              New accounts start with Google, then a passkey. Google proves the mailbox; a passkey is required to finish.
+            </p>
+
+            {error && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                background: 'rgba(255,68,68,0.06)',
+                border: '1px solid rgba(255,68,68,0.18)',
+                borderRadius: 8,
+                padding: '10px 13px',
+                fontSize: 13,
+                color: '#ff6b6b',
+              }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0, marginTop: 1 }}>
+                  <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2"/>
+                  <path d="M7 4v3.5M7 9.5v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                </svg>
+                {error}
+              </div>
+            )}
+
+            <div style={{ marginTop: 6, ...reveal(510) }}>
+              <button
+                type="button"
+                onClick={() => googleLoginStart()}
+                style={{
+                  width: '100%',
+                  minHeight: 46,
+                  padding: '12px 20px',
+                  borderRadius: 12,
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  letterSpacing: '0.02em',
+                  cursor: 'pointer',
+                  transition: 'all 200ms ease',
+                }}
+                aria-label="Continue with Google"
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #9b6cf6 0%, #8b4ced 100%)'
+                  e.currentTarget.style.boxShadow = '0 0 28px rgba(139,92,246,0.38), 0 8px 24px rgba(0,0,0,0.35)'
+                  e.currentTarget.style.transform = 'translateY(-1px)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
+                  e.currentTarget.style.boxShadow = 'none'
+                  e.currentTarget.style.transform = 'translateY(0)'
+                }}
+                onMouseDown={(e) => { e.currentTarget.style.transform = 'translateY(0) scale(0.98)' }}
+                onMouseUp={(e) => { e.currentTarget.style.transform = 'translateY(-1px) scale(1)' }}
+              >
+                Continue with Google
+              </button>
+            </div>
+          </div>
           )}
         </div>
 
@@ -278,6 +345,16 @@ export default function Register() {
         }}>
           VenderScope · Vendor Risk Intelligence
         </p>
+        <p style={{
+          marginTop: 6,
+          textAlign: 'center',
+          fontSize: 11,
+          color: 'var(--lo)',
+          lineHeight: 1.45,
+          ...reveal(920),
+        }}>
+          New accounts: Google, then a passkey. Password sign-in is closed.
+        </p>
       </div>
     </div>
   )
@@ -285,7 +362,7 @@ export default function Register() {
 
 /* ── Sub-components ──────────────────────────────────────────── */
 
-function LoginField({ label, type, value, onChange, placeholder, autoComplete, inputRef }) {
+function LoginField({ label, type, value, onChange, placeholder, autoComplete, inputRef, readOnly }) {
   const [focused, setFocused] = useState(false)
   return (
     <div>
@@ -308,6 +385,7 @@ function LoginField({ label, type, value, onChange, placeholder, autoComplete, i
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete={autoComplete}
+        readOnly={readOnly}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         style={{
@@ -328,6 +406,7 @@ function LoginField({ label, type, value, onChange, placeholder, autoComplete, i
             ? '0 0 0 3px rgba(139,92,246,0.12), inset 0 1px 2px rgba(0,0,0,0.15)'
             : 'none',
           boxSizing: 'border-box',
+          opacity: readOnly ? 0.85 : 1,
         }}
       />
     </div>

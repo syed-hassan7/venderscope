@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from config import get_primary_frontend_url
 from models import OAuthState, User
+from services.auth_service import ALGORITHM, JWT_SECRET
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -190,3 +191,36 @@ def resolve_google_login(db: Session, google_info: dict) -> User:
         status_code=404,
         detail="No account found. Create an account with a passkey first.",
     )
+
+
+GOOGLE_PENDING_TTL_MINUTES = 15
+GOOGLE_PENDING_TYPE = "google_pending"
+
+
+def mint_google_pending_token(*, sub: str, email: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=GOOGLE_PENDING_TTL_MINUTES)
+    payload = {
+        "type": GOOGLE_PENDING_TYPE,
+        "google_sub": sub,
+        "email": email.lower().strip(),
+        "exp": expire,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
+
+
+def read_google_pending_token(token: str | None) -> dict | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("type") != GOOGLE_PENDING_TYPE:
+        return None
+    google_sub = payload.get("google_sub")
+    email = payload.get("email")
+    if not isinstance(google_sub, str) or not google_sub:
+        return None
+    if not isinstance(email, str) or not email:
+        return None
+    return {"google_sub": google_sub, "email": email.lower().strip()}

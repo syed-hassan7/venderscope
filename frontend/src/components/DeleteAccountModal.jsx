@@ -115,7 +115,7 @@ export default function DeleteAccountModal({ onClose }) {
             </div>
 
             <p className="text-sm mb-5" style={{ color: 'var(--mid)' }}>
-              Your account and all associated data will be permanently and immediately deleted, in accordance with our{' '}
+              Your account, vendors, and related records are deleted. Passkeys and a linked Google account go with the user row. To drop one passkey or disconnect Google without closing the account, use Sign-in methods. Security audit rows for this account are removed. Failed-login events with no user id may remain for the audit retention window. See our{' '}
               <a href="/privacy" target="_blank" style={{ color: '#8b5cf6', textDecoration: 'underline' }}>Privacy Policy</a>.
             </p>
 

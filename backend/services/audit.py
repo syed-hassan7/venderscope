@@ -19,6 +19,7 @@ Event naming convention:  <resource>.<outcome>
 
 from fastapi import Request
 from sqlalchemy.orm import Session
+from limiter import _real_ip
 from models import AuditLog
 
 
@@ -39,12 +40,5 @@ def audit(
 
 
 def _get_ip(request: Request) -> str:
-    """Extract real client IP, respecting X-Forwarded-For from Render's proxy."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        # XFF[-1] is appended by Render's load balancer — unforgeable.
-        # XFF[0] is client-controlled. With --proxy-headers + trusted_hosts="*",
-        # uvicorn resolves client.host to XFF[0] (leftmost), not XFF[-1].
-        # Manual split is intentional — do NOT simplify to request.client.host.
-        return forwarded.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
+    """Same client IP as the rate limiter (HF first hop / Render last hop)."""
+    return _real_ip(request)

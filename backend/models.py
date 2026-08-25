@@ -20,6 +20,7 @@ class User(Base):
     email         = Column(String, unique=True, nullable=False, index=True)
     password_hash = Column(String, nullable=True)
     google_sub    = Column(String(128), unique=True, nullable=True, index=True)
+    session_version = Column(Integer, nullable=False, default=0)
     created_at    = Column(DateTime, default=_utcnow)
 
     vendors = relationship("Vendor", back_populates="owner", cascade="all, delete")

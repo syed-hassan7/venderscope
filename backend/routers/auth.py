@@ -1,8 +1,9 @@
 import os
 import uuid
 from typing import Any, Literal, Optional
+from urllib.parse import quote
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Cookie, Response, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, field_validator
 import jwt
@@ -10,21 +11,22 @@ from jwt.exceptions import PyJWTError as JWTError
 from config import is_allowed_frontend_origin, is_production, get_primary_frontend_url
 from database import get_db
 from datetime import datetime, timezone
-from models import User, RevokedToken
+from models import User, RevokedToken, AuditLog, WebAuthnChallenge
 from limiter import limiter
 from services.audit import audit
-from services.auth_factors import get_user_factors
+from services.auth_factors import get_user_factors, passkey_count
 from services.auth_service import (
     verify_password,
     create_access_token,
     create_refresh_token,
+    bump_session_version,
     get_current_user,
     get_optional_user,
     REFRESH_TOKEN_EXPIRE_DAYS,
     JWT_SECRET,
     ALGORITHM,
 )
-from services.recovery_service import consume_recovery_code
+from services.recovery_service import consume_recovery_code, replace_recovery_codes
 from services.webauthn_service import (
     begin_registration,
     finish_registration,
@@ -34,8 +36,11 @@ from services.webauthn_service import (
     finish_step_up,
 )
 from services.google_oauth_service import (
+    GOOGLE_PENDING_TTL_MINUTES,
     build_authorize_url,
     exchange_code_and_verify_id_token,
+    mint_google_pending_token,
+    read_google_pending_token,
     resolve_google_login,
 )
 
@@ -91,7 +96,17 @@ class DeleteAccountRequest(BaseModel):
 
 
 class WebAuthnRegisterBeginRequest(BaseModel):
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    challenge_id: Optional[str] = None
+    credential: Optional[dict[str, Any]] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_max_length(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 128:
+            raise ValueError("Password too long")
+        return v
 
 
 class WebAuthnRegisterFinishRequest(BaseModel):
@@ -114,6 +129,24 @@ class RecoveryConsumeRequest(BaseModel):
     code: str
 
 
+class RecoveryRegenerateRequest(BaseModel):
+    challenge_id: str
+    credential: dict[str, Any]
+
+
+class GoogleLinkStartRequest(BaseModel):
+    password: Optional[str] = None
+    challenge_id: Optional[str] = None
+    credential: Optional[dict[str, Any]] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_max_length(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 128:
+            raise ValueError("Password too long")
+        return v
+
+
 def _issue_session(
     response: Response,
     user: User,
@@ -122,8 +155,9 @@ def _issue_session(
     audit_event: str,
 ) -> dict:
     audit(db, audit_event, request, user_id=user.id)
-    access_token = create_access_token(user.id)
-    refresh_token = create_refresh_token(user.id)
+    sv = int(user.session_version or 0)
+    access_token = create_access_token(user.id, session_version=sv)
+    refresh_token = create_refresh_token(user.id, session_version=sv)
     _set_refresh_cookie(response, refresh_token)
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -149,22 +183,68 @@ def _clear_refresh_cookie(response: Response) -> None:
     )
 
 
-def _verify_origin(request: Request) -> None:
+def _set_google_pending_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key="vs_google_pending",
+        value=token,
+        httponly=True,
+        secure=_IS_PROD,
+        samesite="none" if _IS_PROD else "lax",
+        max_age=GOOGLE_PENDING_TTL_MINUTES * 60,
+        path="/api/auth",
+    )
+
+
+def _clear_google_pending_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key="vs_google_pending",
+        path="/api/auth",
+        samesite="none" if _IS_PROD else "lax",
+        secure=_IS_PROD,
+    )
+
+
+def _require_google_pending(request: Request) -> dict:
+    pending = read_google_pending_token(request.cookies.get("vs_google_pending"))
+    if not pending:
+        raise HTTPException(
+            status_code=403,
+            detail="Start with Google to create an account",
+        )
+    return pending
+
+
+def _verify_origin(request: Request, *, fail_closed: bool = False) -> None:
     """
-    Defence-in-depth CSRF protection for endpoints that consume the httpOnly refresh cookie.
+    Defence-in-depth CSRF protection for cookie-consuming and factor-binding endpoints.
 
-    Primary protection: all JSON endpoints trigger a CORS preflight which blocks
-    cross-origin requests for unlisted origins. This is the second layer — a
-    server-side check that covers edge cases where preflight is bypassed (e.g.
-    same-origin redirects, non-standard clients, future endpoint changes).
-
-    Skipped when no Origin/Referer header is present.
+    fail_closed=True rejects requests with no Origin/Referer (blocks noreferrer GET CSRF).
     """
     origin = request.headers.get("origin") or request.headers.get("referer", "")
     if not origin:
+        if fail_closed:
+            raise HTTPException(status_code=403, detail="Origin not allowed")
         return
     if not is_allowed_frontend_origin(origin):
         raise HTTPException(status_code=403, detail="Origin not allowed")
+
+
+def _require_step_up(
+    db: Session,
+    user: User,
+    *,
+    password: str | None = None,
+    challenge_id: str | None = None,
+    credential: dict | None = None,
+) -> None:
+    if challenge_id and credential:
+        finish_step_up(db, challenge_id, credential, user)
+        return
+    if password and user.password_hash:
+        if verify_password(password, user.password_hash):
+            return
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    raise HTTPException(status_code=403, detail="Step-up required")
 
 
 @router.post("/register")
@@ -184,20 +264,10 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    user = db.query(User).filter(User.email == payload.email.lower()).first()
-    # Always run bcrypt to prevent timing-based user enumeration (CRIT-01)
-    dummy_hash = "$2b$12$LJ3m4ys3Lk0TDBGfGgsZKeDUxPlvMNnbBOHJbEHYsV3eIEfpyQ1SK"
-    pw_hash = user.password_hash if user else dummy_hash
-    password_ok = verify_password(payload.password, pw_hash)
-    if not (user is not None and password_ok):
-        audit(db, "login.failed", request, detail=f"email={payload.email.lower()}")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    audit(db, "login.success", request, user_id=user.id)
-    access_token = create_access_token(user.id)
-    refresh_token = create_refresh_token(user.id)
-    _set_refresh_cookie(response, refresh_token)
-    return {"access_token": access_token, "token_type": "bearer"}
+    raise HTTPException(
+        status_code=403,
+        detail="Password sign-in is closed. Use a passkey, Google, or a recovery code.",
+    )
 
 
 @router.post("/refresh")
@@ -208,7 +278,7 @@ def refresh_token_endpoint(
     vs_refresh: str = Cookie(default=None),
     db: Session = Depends(get_db),
 ):
-    _verify_origin(request)
+    _verify_origin(request, fail_closed=True)
     if not vs_refresh:
         raise HTTPException(status_code=401, detail="No refresh token")
     try:
@@ -222,12 +292,15 @@ def refresh_token_endpoint(
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    # Reject if this token was already revoked (logout or prior rotation)
-    if db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
-        raise HTTPException(status_code=401, detail="Token has been revoked")
-
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    if db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+        bump_session_version(db, user)
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+
+    if int(payload.get("sv", 0)) != int(user.session_version or 0):
         raise HTTPException(status_code=401, detail="Invalid token")
 
     # Revoke the old JTI immediately — each refresh token is single-use
@@ -239,8 +312,8 @@ def refresh_token_endpoint(
         ))
         db.commit()
 
-    new_access_token  = create_access_token(user.id)
-    new_refresh_token = create_refresh_token(user.id)
+    new_access_token  = create_access_token(user.id, session_version=user.session_version or 0)
+    new_refresh_token = create_refresh_token(user.id, session_version=user.session_version or 0)
     _set_refresh_cookie(response, new_refresh_token)
     return {"access_token": new_access_token}
 
@@ -253,25 +326,24 @@ def logout(
     vs_refresh: str = Cookie(default=None),
     db: Session = Depends(get_db),
 ):
-    _verify_origin(request)
-    # Blacklist the refresh token's JTI so it can't be reused after logout
-    if vs_refresh:
-        try:
-            payload = jwt.decode(vs_refresh, JWT_SECRET, algorithms=[ALGORITHM])
-            jti = payload.get("jti")
-            exp = payload.get("exp")
-            if jti and exp:
-                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
-                if expires_at > datetime.now(timezone.utc):
-                    db.add(RevokedToken(jti=jti, expires_at=expires_at))
-                    db.commit()
-        except JWTError:
-            pass  # Malformed or already-expired token — nothing to revoke
-    # Determine user_id for the audit log (best-effort — token may already be expired)
+    _verify_origin(request, fail_closed=True)
     _uid = None
     if vs_refresh:
         try:
-            _uid = jwt.decode(vs_refresh, JWT_SECRET, algorithms=[ALGORITHM]).get("sub")
+            payload = jwt.decode(vs_refresh, JWT_SECRET, algorithms=[ALGORITHM])
+            _uid = payload.get("sub")
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            if payload.get("type") == "refresh" and _uid:
+                user = db.query(User).filter(User.id == _uid).first()
+                if user:
+                    bump_session_version(db, user)
+            if jti and exp:
+                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+                if expires_at > datetime.now(timezone.utc):
+                    if not db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+                        db.add(RevokedToken(jti=jti, expires_at=expires_at))
+                        db.commit()
         except JWTError:
             pass
     audit(db, "logout", request, user_id=_uid)
@@ -301,8 +373,18 @@ def webauthn_register_begin(
     current_user: User | None = Depends(get_optional_user),
 ):
     if current_user is not None:
+        if passkey_count(db, current_user.id) > 0 or current_user.password_hash:
+            _require_step_up(
+                db,
+                current_user,
+                password=payload.password,
+                challenge_id=payload.challenge_id,
+                credential=payload.credential,
+            )
         return begin_registration(db, current_user.email, user=current_user, for_signup=False)
-    return begin_registration(db, payload.email, for_signup=True)
+    pending = _require_google_pending(request)
+    _verify_origin(request, fail_closed=True)
+    return begin_registration(db, pending["email"], for_signup=True)
 
 
 @router.post("/webauthn/register/finish")
@@ -312,15 +394,43 @@ def webauthn_register_finish(
     response: Response,
     payload: WebAuthnRegisterFinishRequest,
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
 ):
-    user, recovery_codes = finish_registration(
-        db,
-        payload.challenge_id,
-        payload.credential,
-        device_label=payload.device_label,
-        issue_recovery_codes=True,
-    )
+    row = db.query(WebAuthnChallenge).filter(WebAuthnChallenge.id == payload.challenge_id).first()
+    google_sub = None
+    if row is not None and row.email:
+        pending = _require_google_pending(request)
+        _verify_origin(request, fail_closed=True)
+        if pending["email"] != (row.email or "").lower().strip():
+            raise HTTPException(
+                status_code=403,
+                detail="Start with Google to create an account",
+            )
+        google_sub = pending["google_sub"]
+    elif row is not None and row.user_id:
+        if current_user is None or current_user.id != row.user_id:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        user, recovery_codes = finish_registration(
+            db,
+            payload.challenge_id,
+            payload.credential,
+            device_label=payload.device_label,
+            issue_recovery_codes=True,
+            google_sub=google_sub,
+        )
+    except HTTPException as exc:
+        if (
+            google_sub
+            and exc.status_code == 409
+            and exc.detail == "Google account already linked to another user"
+        ):
+            err = JSONResponse(status_code=409, content={"detail": exc.detail})
+            _clear_google_pending_cookie(err)
+            return err
+        raise
     session = _issue_session(response, user, request, db, "webauthn.register.success")
+    _clear_google_pending_cookie(response)
     result = dict(session)
     if recovery_codes:
         result["recovery_codes"] = recovery_codes
@@ -379,20 +489,44 @@ def recovery_consume(
     return _issue_session(response, user, request, db, "recovery.login.success")
 
 
+@router.post("/recovery/regenerate")
+@limiter.limit("3/hour")
+def recovery_regenerate(
+    request: Request,
+    payload: RecoveryRegenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _verify_origin(request)
+    finish_step_up(db, payload.challenge_id, payload.credential, current_user)
+    codes = replace_recovery_codes(db, current_user.id)
+    audit(db, "recovery.regenerated", request, user_id=current_user.id)
+    return {"recovery_codes": codes}
+
+
 @router.get("/google/start")
 @limiter.limit("10/minute")
 def google_start_login(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(build_authorize_url(db, "login"))
 
 
-@router.get("/google/link/start")
+@router.post("/google/link/start")
 @limiter.limit("10/minute")
 def google_start_link(
     request: Request,
+    payload: GoogleLinkStartRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return RedirectResponse(build_authorize_url(db, "link", user_id=current_user.id))
+    _verify_origin(request, fail_closed=True)
+    _require_step_up(
+        db,
+        current_user,
+        password=payload.password,
+        challenge_id=payload.challenge_id,
+        credential=payload.credential,
+    )
+    return {"url": build_authorize_url(db, "link", user_id=current_user.id)}
 
 
 @router.get("/google/callback")
@@ -412,11 +546,16 @@ def google_callback(
         if exc.status_code == 409:
             return RedirectResponse(f"{frontend}/login?error=google_conflict")
         if exc.status_code == 404:
-            email = google_info.get("email", "")
-            return RedirectResponse(f"{frontend}/register?email={email}&from=google")
+            email = quote(google_info.get("email", ""), safe="")
+            redirect = RedirectResponse(f"{frontend}/register?email={email}&from=google")
+            _set_google_pending_cookie(
+                redirect,
+                mint_google_pending_token(sub=google_info["sub"], email=google_info.get("email", "")),
+            )
+            return redirect
         raise
 
-    refresh_token = create_refresh_token(user.id)
+    refresh_token = create_refresh_token(user.id, session_version=user.session_version or 0)
     audit(db, "google.login.success", request, user_id=user.id)
     redirect = RedirectResponse(f"{frontend}/?oauth=1")
     _set_refresh_cookie(redirect, refresh_token)
@@ -455,6 +594,7 @@ def delete_account(
         audit(db, "account.delete.failed", request, user_id=current_user.id)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     user_id = current_user.id
+    db.query(AuditLog).filter(AuditLog.user_id == user_id).delete(synchronize_session=False)
     db.delete(current_user)
     db.commit()
     audit(db, "account.deleted", request, user_id=user_id)

@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from webauthn import (
     generate_authentication_options,
@@ -76,9 +77,10 @@ def _store_challenge(
     purpose: str,
     user_id: str | None = None,
     email: str | None = None,
+    challenge_id: str | None = None,
 ) -> str:
     row = WebAuthnChallenge(
-        id=str(uuid.uuid4()),
+        id=challenge_id or str(uuid.uuid4()),
         user_id=user_id,
         email=email.lower() if email else None,
         challenge=bytes_to_base64url(challenge_bytes),
@@ -116,27 +118,25 @@ def begin_registration(
             WebAuthnCredential.user_id == existing.id
         ).first():
             raise HTTPException(status_code=409, detail="An account with this email already exists.")
-        if not existing:
-            user = User(id=str(uuid.uuid4()), email=email_lower, password_hash=None)
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        else:
-            user = existing
+        user = existing
+        pending_id = existing.id if existing else str(uuid.uuid4())
     elif user is None:
         raise HTTPException(status_code=400, detail="User required")
+    else:
+        pending_id = user.id
 
     exclude: list[PublicKeyCredentialDescriptor] = []
-    for cred in db.query(WebAuthnCredential).filter(WebAuthnCredential.user_id == user.id):
-        exclude.append(
-            PublicKeyCredentialDescriptor(id=base64url_to_bytes(cred.credential_id))
-        )
+    if user is not None:
+        for cred in db.query(WebAuthnCredential).filter(WebAuthnCredential.user_id == user.id):
+            exclude.append(
+                PublicKeyCredentialDescriptor(id=base64url_to_bytes(cred.credential_id))
+            )
 
     options = generate_registration_options(
         rp_id=_rp_id(),
         rp_name=_rp_name(),
-        user_name=user.email,
-        user_id=user.id.encode("utf-8"),
+        user_name=email_lower if for_signup else user.email,
+        user_id=pending_id.encode("utf-8"),
         exclude_credentials=exclude,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED,
@@ -147,10 +147,11 @@ def begin_registration(
         db,
         options.challenge,
         "register",
-        user_id=user.id,
-        email=user.email if for_signup else None,
+        user_id=user.id if user else None,
+        email=email_lower if for_signup else None,
+        challenge_id=pending_id if user is None else None,
     )
-    return _options_payload(options, challenge_id, userId=user.id)
+    return _options_payload(options, challenge_id, userId=pending_id)
 
 
 def finish_registration(
@@ -159,21 +160,48 @@ def finish_registration(
     credential: dict,
     device_label: str | None = None,
     issue_recovery_codes: bool = False,
+    google_sub: str | None = None,
 ) -> tuple[User, list[str] | None]:
     row = _consume_challenge(db, challenge_id, "register")
-    if not row.user_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired challenge")
-    user = db.query(User).filter(User.id == row.user_id).first()
+    if google_sub:
+        occupied_sub = db.query(User).filter(User.google_sub == google_sub).first()
+        if occupied_sub and occupied_sub.id not in {row.user_id, row.id}:
+            raise HTTPException(
+                status_code=409,
+                detail="Google account already linked to another user",
+            )
+
+    user = None
+    new_user = False
+    if row.user_id:
+        user = db.query(User).filter(User.id == row.user_id).first()
+    elif row.email:
+        occupied = db.query(User).filter(User.email == row.email).first()
+        if occupied:
+            has_passkey = db.query(WebAuthnCredential).filter(
+                WebAuthnCredential.user_id == occupied.id
+            ).first()
+            if has_passkey:
+                raise HTTPException(status_code=409, detail="An account with this email already exists.")
+            user = occupied
+        else:
+            user = User(id=row.id, email=row.email, password_hash=None)
+            new_user = True
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired challenge")
 
-    verification = verify_registration_response(
-        credential=credential,
-        expected_challenge=base64url_to_bytes(row.challenge),
-        expected_rp_id=_rp_id(),
-        expected_origin=_expected_origins(),
-        require_user_verification=True,
-    )
+    try:
+        verification = verify_registration_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(row.challenge),
+            expected_rp_id=_rp_id(),
+            expected_origin=_expected_origins(),
+            require_user_verification=True,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid credential")
 
     cred_id = bytes_to_base64url(verification.credential_id)
     if db.query(WebAuthnCredential).filter(WebAuthnCredential.credential_id == cred_id).first():
@@ -182,6 +210,8 @@ def finish_registration(
     transports = credential.get("response", {}).get("transports")
     transport_str = ",".join(transports) if transports else None
 
+    if new_user:
+        db.add(user)
     db.add(
         WebAuthnCredential(
             user_id=user.id,
@@ -193,7 +223,25 @@ def finish_registration(
             device_label=device_label,
         )
     )
-    db.commit()
+    if google_sub:
+        occupied = db.query(User).filter(User.google_sub == google_sub).first()
+        if occupied and occupied.id != user.id:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Google account already linked to another user",
+            )
+        user.google_sub = google_sub
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Google account already linked to another user",
+        )
 
     recovery_plain: list[str] | None = None
     if issue_recovery_codes:

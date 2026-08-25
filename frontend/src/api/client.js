@@ -110,8 +110,12 @@ export const webauthnAssertBegin = (data) => api.post('/auth/webauthn/assert/beg
 export const webauthnAssertFinish = (data) => api.post('/auth/webauthn/assert/finish', data)
 export const webauthnStepUpBegin = () => api.post('/auth/webauthn/step-up/begin')
 export const recoveryConsume = (data) => api.post('/auth/recovery/consume', data)
+export const recoveryRegenerate = (data) => api.post('/auth/recovery/regenerate', data)
 export const googleLoginStart = () => { window.location.href = `${BASE_URL}/auth/google/start` }
-export const googleLinkStart = () => { window.location.href = `${BASE_URL}/auth/google/link/start` }
+export const googleLinkStart = (body = {}) => api.post('/auth/google/link/start', body)
+export const googleUnlink = () => api.post('/auth/google/unlink')
+export const listPasskeys = () => api.get('/auth/webauthn/credentials')
+export const deletePasskey = (id) => api.delete(`/auth/webauthn/credentials/${id}`)
 // config override used by the initial silent refresh — needs a longer bound to
 // survive an HF cold start instead of hanging on the instance's unbounded default
 export const refresh        = (config) => api.post('/auth/refresh', {}, config)

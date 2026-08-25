@@ -184,6 +184,9 @@ export default function DocPage({ markdown }) {
         <p className="text-center text-xs mt-8" style={{ color: '#8080aa' }}>
           VenderScope · Continuous Passive Vendor Risk Intelligence
         </p>
+        <p className="text-center text-xs mt-2" style={{ color: '#8080aa' }}>
+          New accounts: Google, then a passkey. Password sign-in is closed.
+        </p>
       </div>
     </div>
   )

@@ -3,11 +3,23 @@
 import uuid
 
 import pytest
-from database import SessionLocal
-from models import User, WebAuthnCredential, RecoveryCodeHash
-from services.auth_factors import get_user_factors, count_login_factors
+from database import SessionLocal, engine, Base
+from models import User, WebAuthnCredential
+from services.auth_factors import (
+    get_user_factors,
+    count_login_factors,
+    can_remove_passkey,
+    can_unlink_google,
+)
 from services.auth_service import hash_password
 from services.recovery_service import store_recovery_codes, generate_plain_codes
+
+
+@pytest.fixture(autouse=True)
+def _fresh_db():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    yield
 
 
 def _user(db, email_suffix: str, password: str | None = "SecureP@ss123!") -> User:
@@ -31,7 +43,7 @@ class TestAuthFactors:
         assert factors["passkey_count"] == 0
         assert factors["google"] is False
         assert factors["recovery_codes_remaining"] == 0
-        assert count_login_factors(db, user) == 1
+        assert count_login_factors(db, user) == 0
         db.close()
 
     def test_passkey_user_null_password(self):
@@ -63,4 +75,113 @@ class TestAuthFactors:
         factors = get_user_factors(db, user)
         assert factors["google"] is True
         assert factors["password"] is False
+        db.close()
+
+    def test_can_unlink_google_false_when_not_linked(self):
+        db = SessionLocal()
+        user = _user(db, "no-google")
+        assert can_unlink_google(db, user) is False
+        db.close()
+
+    def test_can_unlink_google_false_when_only_password_hash_remains(self):
+        db = SessionLocal()
+        user = _user(db, "g-pw")
+        user.google_sub = "google-sub-" + uuid.uuid4().hex
+        db.commit()
+        assert can_unlink_google(db, user) is False
+        db.close()
+
+    def test_can_unlink_google_true_when_passkey_remains(self):
+        db = SessionLocal()
+        user = _user(db, "g-pk", password=None)
+        user.google_sub = "google-sub-" + uuid.uuid4().hex
+        db.add(
+            WebAuthnCredential(
+                user_id=user.id,
+                credential_id="cred-" + uuid.uuid4().hex,
+                public_key="dGVzdA==",
+                sign_count=0,
+            )
+        )
+        db.commit()
+        assert can_unlink_google(db, user) is True
+        db.close()
+
+    def test_can_unlink_google_false_when_only_unused_recovery_remains(self):
+        db = SessionLocal()
+        user = _user(db, "g-rc", password=None)
+        user.google_sub = "google-sub-" + uuid.uuid4().hex
+        store_recovery_codes(db, user.id, generate_plain_codes(2))
+        db.commit()
+        assert can_unlink_google(db, user) is False
+        db.close()
+
+    def test_can_unlink_google_false_when_last_factor(self):
+        db = SessionLocal()
+        user = _user(db, "g-only", password=None)
+        user.google_sub = "google-sub-" + uuid.uuid4().hex
+        db.commit()
+        assert can_unlink_google(db, user) is False
+        db.close()
+
+    def test_can_remove_passkey_false_when_only_recovery_remains(self):
+        db = SessionLocal()
+        user = _user(db, "pk-rc", password=None)
+        db.add(
+            WebAuthnCredential(
+                user_id=user.id,
+                credential_id="cred-" + uuid.uuid4().hex,
+                public_key="dGVzdA==",
+                sign_count=0,
+            )
+        )
+        store_recovery_codes(db, user.id, generate_plain_codes(2))
+        db.commit()
+        assert can_remove_passkey(db, user) is False
+        db.close()
+
+    def test_can_remove_passkey_false_when_last_factor(self):
+        db = SessionLocal()
+        user = _user(db, "pk-only", password=None)
+        db.add(
+            WebAuthnCredential(
+                user_id=user.id,
+                credential_id="cred-" + uuid.uuid4().hex,
+                public_key="dGVzdA==",
+                sign_count=0,
+            )
+        )
+        db.commit()
+        assert can_remove_passkey(db, user) is False
+        db.close()
+
+    def test_can_remove_passkey_false_when_only_password_hash_remains(self):
+        db = SessionLocal()
+        user = _user(db, "pk-pw")
+        db.add(
+            WebAuthnCredential(
+                user_id=user.id,
+                credential_id="cred-" + uuid.uuid4().hex,
+                public_key="dGVzdA==",
+                sign_count=0,
+            )
+        )
+        db.commit()
+        assert can_remove_passkey(db, user) is False
+        db.close()
+
+    def test_can_remove_passkey_true_when_google_remains(self):
+        db = SessionLocal()
+        user = _user(db, "pk-g", password=None)
+        user.google_sub = "google-sub-" + uuid.uuid4().hex
+        db.add(
+            WebAuthnCredential(
+                user_id=user.id,
+                credential_id="cred-" + uuid.uuid4().hex,
+                public_key="dGVzdA==",
+                sign_count=0,
+            )
+        )
+        db.commit()
+        assert can_remove_passkey(db, user) is True
         db.close()

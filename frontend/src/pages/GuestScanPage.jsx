@@ -365,6 +365,9 @@ export default function GuestScanPage() {
           <p style={{ fontSize: 10, color: 'var(--lo)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             VenderScope · Vendor Risk Intelligence
           </p>
+          <p style={{ fontSize: 11, color: 'var(--lo)', marginTop: 6, lineHeight: 1.45 }}>
+            New accounts: Google, then a passkey. Password sign-in is closed.
+          </p>
         </div>
 
       </div>

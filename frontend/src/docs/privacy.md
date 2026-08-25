@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** 22 May 2026
+**Last updated:** 25 August 2026
 **Effective date:** 23 March 2026
 
 This Privacy Policy explains how VenderScope ("we", "us", "our") collects, uses, stores, and protects your information when you use our vendor risk intelligence platform.
@@ -32,9 +32,9 @@ When you create an account, we collect:
 
 **Recovery codes:** We store hashed one-time recovery codes (not plaintext). Codes are shown once at signup.
 
-**Google Sign-In (optional):** If you link Google, we store Google's subject identifier (`sub`) and your verified Google email for sign-in.
+**Google Sign-In:** New accounts start with Google, then a passkey. We store Google's subject identifier (`sub`) and your verified Google email as the account label. Linking Google later requires confirming with a passkey or password. You can disconnect Google from Sign-in methods unless it is the last strong sign-in method.
 
-**Legacy passwords:** Older accounts may still use a bcrypt password hash. New signups use passkeys instead of passwords.
+**Legacy passwords:** Password sign-in is closed. Older accounts may still store a bcrypt hash so you can confirm identity when adding a passkey, linking Google, or deleting the account.
 
 We do not collect your name, phone number, address, date of birth, or payment information.
 
@@ -139,7 +139,7 @@ In the event of a merger, acquisition, or asset sale, your data may be transferr
 | Audit logs | 12 months |
 | Revoked tokens | Until token expiry date |
 
-When an account is deleted, all associated vendor data, risk events, score history, and compliance data is permanently and immediately deleted.
+When an account is deleted, vendor data, risk events, score history, compliance data, passkeys, recovery hashes, and audit rows tied to that user id are deleted immediately. Failed-login audit events that never had a user id may remain until the audit retention window ends.
 
 ---
 
@@ -154,13 +154,15 @@ You have the right to request a copy of all personal data we hold about you. We 
 You can correct inaccurate personal data at any time via your account settings.
 
 ### 7.3 Right to Erasure / Right to be Forgotten (Article 17)
-You can delete your account at any time via Settings → Delete Account. This permanently removes:
-- Your email address and password hash
+You can delete your account at any time via Delete Account in the footer. This removes:
+- Your email address, password hash (if any), Google subject, passkeys, and recovery hashes
 - All vendors you added
 - All associated risk events, score history, and compliance data
-- Your alert configuration
+- Audit log rows attributed to your user id
 
-Deletion is permanent and irreversible. All data is erased immediately upon account deletion.
+You can also remove individual passkeys or disconnect Google from **Sign-in methods** in the footer without deleting the account. Recovery codes are not enough to drop the last passkey or unlink Google. Use Delete Account if you want everything gone.
+
+Deletion is permanent. Unattributed failed-login audit events may remain until the audit log retention period ends.
 
 ### 7.4 Right to Restriction of Processing (Article 18)
 You can ask us to pause processing of your data while a dispute is resolved.

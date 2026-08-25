@@ -1,6 +1,7 @@
 """Recovery code login tests."""
 
 import uuid
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,4 +66,40 @@ class TestRecoveryCodes:
             "/api/auth/login",
             json={"email": email, "password": codes[0]},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 403
+
+    def test_regenerate_invalidates_old_codes(self):
+        from services.auth_service import create_access_token, hash_password
+
+        email = f"regen_{uuid.uuid4().hex[:8]}@example.com"
+        old_codes = generate_plain_codes(3)
+        user_id = str(uuid.uuid4())
+        db = SessionLocal()
+        db.add(User(id=user_id, email=email, password_hash=hash_password("SecureP@ss123!")))
+        for code in old_codes:
+            db.add(RecoveryCodeHash(user_id=user_id, code_hash=hash_recovery_code(code)))
+        db.commit()
+        db.close()
+
+        token = create_access_token(user_id)
+        with patch("routers.auth.finish_step_up"):
+            regen = client.post(
+                "/api/auth/recovery/regenerate",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"challenge_id": "cid", "credential": {"id": "x"}},
+            )
+        assert regen.status_code == 200
+        new_codes = regen.json()["recovery_codes"]
+        assert len(new_codes) == 10
+
+        old = client.post(
+            "/api/auth/recovery/consume",
+            json={"email": email, "code": old_codes[0]},
+        )
+        assert old.status_code == 401
+
+        fresh = client.post(
+            "/api/auth/recovery/consume",
+            json={"email": email, "code": new_codes[0]},
+        )
+        assert fresh.status_code == 200

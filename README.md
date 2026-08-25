@@ -24,10 +24,11 @@ Live production testing on v4.6 (real vendor scans through the hosted app, not j
 
 **Follow-up fix, same release (round 2):** a second live scan on the same vendor still surfaced 3 more false positives — two came from `CREDIBLE_DOMAINS` bodies (`ncsc.gov.uk`, `pcisecuritystandards.org`) publishing generic scheme-overview/blog content that never named the vendor; membership in that domain list was being treated as sufficient evidence on its own. Fixed by requiring an actual vendor mention even on a credible domain. The third — a third-party "AI tools" directory page that happened to name-drop the vendor while discussing something else, on a dead/404 URL — passed every deterministic gate cleanly, because it *does* mention the vendor; this is the boundary of what path/keyword heuristics can close (the space of third-party directory/aggregator sites is effectively unenumerable). An LLM-based audit fallback pass, scoped in round 1 but deferred as unnecessary paid-dependency polish, is now the planned fix for this remaining class rather than optional UX — two consecutive rounds of fresh false positives from unenumerated page shapes is the evidence that a third heuristic-gate pass won't close it.
 
+**Follow-up fix, same release (auth hardening):** password sign-in is closed (`POST /api/auth/login` → 403). Linking Google is POST-only with a live access token plus passkey or password step-up. Adding a passkey while logged in requires the same step-up. Refresh and logout fail closed without Origin/Referer. Reuse of a revoked refresh JTI increments `session_version` and kills the session family; logout does the same so leftover 15-minute access JWTs die immediately. Recovery codes cannot drop the last passkey or unlink Google.
+
 Verification after this pass:
 
-- `python -m pytest -q` → `93 passed`
-- Both rounds verified against the same real vendor site and the exact URLs it surfaced as false evidence
+- `python -m pytest -q` → `166 passed`
 
 Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 
@@ -45,8 +46,8 @@ Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 - **To fix:** buy a domain (e.g. `venderscope.app` ~$14/yr), add Resend DNS records (DKIM TXT + SPF MX/TXT), set `RESEND_API_KEY` + `RESEND_FROM_EMAIL=noreply@<domain>` in HF env vars. All send logic already exists.
 
 ### Password Reset / Profile Page
-- No password reset flow exists. Custom auth (bcrypt + JWT) — Supabase Auth is not used.
-- Plan: `PasswordResetToken` model + `POST /api/auth/forgot-password` + `POST /api/auth/reset-password` + `/reset-password` frontend page. Blocked on email working first.
+- Password **sign-in is closed**. There is no password-reset mailer. Use a passkey, Google, or a recovery code.
+- Legacy bcrypt hashes may remain for step-up (add passkey, link Google, delete account) until you remove them by replacing factors.
 
 ### Scheduler & Hosting
 - Nightly scan currently has two paths: the original APScheduler job (behind a DB-backed `SchedulerLease`, still authoritative) and, as of v4.6, an alternate Modal Cron path — gated by `ENABLE_LEGACY_NIGHTLY_SCAN` so only one runs. Per-user scheduler scoping (so users only get alerts for their own vendors) is still on the roadmap.
@@ -90,7 +91,7 @@ Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 | Backend       | Python 3.11+, FastAPI, SQLAlchemy 2.0, APScheduler, Uvicorn                 |
 | Database      | PostgreSQL (Supabase, production) / SQLite (local dev)                       |
 | DB Driver     | pg8000 (pure Python, Python 3.14+ compatible)                                |
-| Authentication| JWT (python-jose), bcrypt, httpOnly cookies                                  |
+| Authentication| JWT (HS256), passkeys (WebAuthn), Google OIDC, bcrypt step-up hashes, httpOnly cookies |
 | Frontend      | React 19, Vite 8, React Router 7, TailwindCSS 3, Axios                      |
 | Intelligence  | HIBP API, NVD/NIST API, Companies House API, Shodan API                      |
 | Compliance    | Tavily Search API, BeautifulSoup4, security.txt                             |
@@ -248,9 +249,11 @@ VenderScope uses a **dual-token JWT scheme**:
 | Access token | JS memory (never localStorage) | 15 minutes | Bearer auth on every API request |
 | Refresh token | `httpOnly` `SameSite=None; Secure` cookie | 7 days | Silently issues new access tokens (single-use) |
 
-**Token rotation:** Every refresh issues a new refresh token and immediately revokes the previous token's JWT ID (JTI) in the database. Replayed refresh tokens are rejected.
+**Token rotation:** Every refresh issues a new refresh token and immediately revokes the previous token's JWT ID (JTI). Replaying a revoked refresh token increments `session_version` and invalidates the rest of that user's session family.
 
-**Logout:** Instantly blacklists the current refresh token's JTI. The token is useless even if intercepted.
+**Logout:** Blacklists the current refresh JTI and increments `session_version`, so outstanding 15-minute access tokens fail immediately.
+
+**Sign-in methods:** New accounts need Google (verified mailbox) then a passkey. Password registration and password sign-in are closed. Passkey, Google, or a one-time recovery code can sign you in. Linking Google or adding another passkey requires step-up (existing passkey or leftover password hash). Recovery codes cannot remove the last passkey.
 
 **Session persistence:** On page load, `AuthContext` calls `/api/auth/refresh` to silently restore the session from the cookie — no re-login needed after browser restart.
 
@@ -262,13 +265,13 @@ VenderScope has undergone a full security audit. Key controls:
 
 | Control | Implementation |
 |---------|---------------|
-| Authentication | JWT with httpOnly cookie refresh tokens |
+| Authentication | JWT (HS256) with `session_version`; passkeys; Google OIDC; recovery codes; password sign-in closed |
 | Authorization | Every DB query scoped to `current_user.id` |
 | IDOR protection | All resource endpoints return 404 (not 403) for unauthorised access |
 | Brute force protection | Rate limiting on all auth endpoints (SlowAPI) |
-| Password storage | bcrypt 12 rounds |
-| Password policy | Min 12 chars, uppercase, digit |
-| DoS protection | Max password length at login (prevents billion-hash attack) |
+| Password storage | bcrypt 12 rounds for leftover hashes (step-up / delete only) |
+| Password policy | Min 12 chars, uppercase, digit (legacy hashes / step-up) |
+| DoS protection | Max password length on auth bodies (prevents billion-hash attack) |
 | XSS | Access token in memory only; httpOnly cookie for refresh |
 | SSRF | RFC1918 blocklist, cloud metadata endpoints, URL-decode bypass prevention, decimal/IPv6-mapped IP detection, 3-hop redirect chain validation with per-hop domain check |
 | SQL injection | SQLAlchemy ORM (parameterised queries throughout) |
@@ -276,8 +279,8 @@ VenderScope has undergone a full security audit. Key controls:
 | Security headers | X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy |
 | Audit trail | Append-only AuditLog table; X-Forwarded-For aware |
 | Secrets | All credentials in environment variables; `.env` gitignored |
-| Token replay | JTI blacklist on logout + single-use refresh tokens |
-| CSRF | Origin/Referer header validation on all cookie-consuming endpoints |
+| Token replay | JTI blacklist + `session_version` family kill on reuse/logout |
+| CSRF | Origin/Referer required on refresh and logout (fail closed) |
 | Content injection | XML escape on all external data in PDF; HTML escape in email templates |
 | Session tokens | UUIDs (not sequential integers) for vendor IDs |
 | Input validation | Pydantic validators on all inputs; domain normalised on ingest |

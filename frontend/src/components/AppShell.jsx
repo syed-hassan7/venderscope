@@ -1,4 +1,5 @@
 import TopNav from './TopNav'
+import Footer from './Footer'
 
 export default function AppShell({ children }) {
   return (
@@ -7,6 +8,7 @@ export default function AppShell({ children }) {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {children}
       </div>
+      <Footer />
     </div>
   )
 }

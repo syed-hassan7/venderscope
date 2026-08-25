@@ -51,22 +51,35 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(user_id: str) -> str:
+def create_access_token(user_id: str, session_version: int = 0) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     return jwt.encode(
-        {"sub": user_id, "exp": expire, "type": "access"},
+        {"sub": user_id, "exp": expire, "type": "access", "sv": int(session_version)},
         JWT_SECRET,
         algorithm=ALGORITHM,
     )
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user_id: str, session_version: int = 0) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     return jwt.encode(
-        {"sub": user_id, "exp": expire, "type": "refresh", "jti": str(uuid.uuid4())},
+        {
+            "sub": user_id,
+            "exp": expire,
+            "type": "refresh",
+            "jti": str(uuid.uuid4()),
+            "sv": int(session_version),
+        },
         JWT_SECRET,
         algorithm=ALGORITHM,
     )
+
+
+def bump_session_version(db: Session, user: User) -> int:
+    user.session_version = int(user.session_version or 0) + 1
+    db.commit()
+    db.refresh(user)
+    return user.session_version
 
 
 def get_current_user(
@@ -87,5 +100,7 @@ def get_current_user(
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if int(payload.get("sv", 0)) != int(user.session_version or 0):
         raise HTTPException(status_code=401, detail="Invalid token")
     return user

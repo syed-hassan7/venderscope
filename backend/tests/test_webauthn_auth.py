@@ -11,10 +11,12 @@ from webauthn.helpers import bytes_to_base64url
 from main import app
 from database import engine, Base, SessionLocal
 from models import User, WebAuthnCredential
-from services.auth_service import hash_password
+from services.auth_service import hash_password, create_access_token
+from services.google_oauth_service import mint_google_pending_token
 
 client = TestClient(app)
 VALID_PASS = "SecureP@ss123!"
+ORIGIN = {"Origin": "http://localhost:5173"}
 
 
 def _password_user(email: str) -> None:
@@ -44,13 +46,28 @@ def _mock_registration_verification():
 def _fresh_db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    client.cookies.clear()
     yield
 
 
+def _attach_pending(email: str, sub: str | None = None) -> str:
+    sub = sub or "gs-" + uuid.uuid4().hex
+    token = mint_google_pending_token(sub=sub, email=email)
+    client.cookies.set("vs_google_pending", token)
+    return sub
+
+
 class TestWebAuthnRegister:
-    def test_challenge_single_use(self):
+    def test_signup_begin_without_pending_is_403(self):
         email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
         begin = client.post("/api/auth/webauthn/register/begin", json={"email": email})
+        assert begin.status_code == 403
+        assert begin.json()["detail"] == "Start with Google to create an account"
+
+    def test_challenge_single_use(self):
+        email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
+        _attach_pending(email)
+        begin = client.post("/api/auth/webauthn/register/begin", json={"email": "ignored@example.com"}, headers=ORIGIN)
         assert begin.status_code == 200
         challenge_id = begin.json()["challengeId"]
 
@@ -70,6 +87,7 @@ class TestWebAuthnRegister:
             finish = client.post(
                 "/api/auth/webauthn/register/finish",
                 json={"challenge_id": challenge_id, "credential": cred},
+                headers=ORIGIN,
             )
             assert finish.status_code == 200
             assert "access_token" in finish.json()
@@ -78,12 +96,23 @@ class TestWebAuthnRegister:
             retry = client.post(
                 "/api/auth/webauthn/register/finish",
                 json={"challenge_id": challenge_id, "credential": cred},
+                headers=ORIGIN,
             )
             assert retry.status_code == 400
 
+    def test_begin_does_not_insert_user(self):
+        email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
+        _attach_pending(email)
+        begin = client.post("/api/auth/webauthn/register/begin", json={"email": email}, headers=ORIGIN)
+        assert begin.status_code == 200
+        db = SessionLocal()
+        assert db.query(User).filter(User.email == email.lower()).first() is None
+        db.close()
+
     def test_finish_creates_credential_row(self):
         email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
-        begin = client.post("/api/auth/webauthn/register/begin", json={"email": email})
+        sub = _attach_pending(email)
+        begin = client.post("/api/auth/webauthn/register/begin", json={"email": email}, headers=ORIGIN)
         challenge_id = begin.json()["challengeId"]
 
         with patch(
@@ -102,17 +131,100 @@ class TestWebAuthnRegister:
             client.post(
                 "/api/auth/webauthn/register/finish",
                 json={"challenge_id": challenge_id, "credential": cred},
+                headers=ORIGIN,
             )
 
         db = SessionLocal()
         user = db.query(User).filter(User.email == email.lower()).first()
         assert user is not None
         assert user.password_hash is None
+        assert user.google_sub == sub
         assert db.query(WebAuthnCredential).filter(WebAuthnCredential.user_id == user.id).count() == 1
         db.close()
 
+    def test_logged_in_add_passkey_does_not_need_pending(self):
+        email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
+        user_id = str(uuid.uuid4())
+        db = SessionLocal()
+        db.add(User(id=user_id, email=email, password_hash=hash_password(VALID_PASS)))
+        db.commit()
+        db.close()
+        token = create_access_token(user_id)
+        begin = client.post(
+            "/api/auth/webauthn/register/begin",
+            json={"email": email, "password": VALID_PASS},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert begin.status_code == 200
 
-class TestWebAuthnAssert:
+    def test_logged_in_finish_without_bearer_is_401(self):
+        email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
+        user_id = str(uuid.uuid4())
+        db = SessionLocal()
+        db.add(User(id=user_id, email=email, password_hash=hash_password(VALID_PASS)))
+        db.commit()
+        db.close()
+        token = create_access_token(user_id)
+        begin = client.post(
+            "/api/auth/webauthn/register/begin",
+            json={"email": email, "password": VALID_PASS},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        challenge_id = begin.json()["challengeId"]
+        with patch(
+            "services.webauthn_service.verify_registration_response",
+            return_value=_mock_registration_verification(),
+        ):
+            finish = client.post(
+                "/api/auth/webauthn/register/finish",
+                json={
+                    "challenge_id": challenge_id,
+                    "credential": {
+                        "id": bytes_to_base64url(b"test-credential-id-bytes"),
+                        "rawId": bytes_to_base64url(b"test-credential-id-bytes"),
+                        "type": "public-key",
+                        "response": {
+                            "clientDataJSON": base64.b64encode(b"{}").decode(),
+                            "attestationObject": base64.b64encode(b"att").decode(),
+                        },
+                    },
+                },
+            )
+        assert finish.status_code == 401
+
+    def test_failed_verify_does_not_insert_user(self):
+        email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
+        _attach_pending(email)
+        begin = client.post(
+            "/api/auth/webauthn/register/begin",
+            json={"email": email},
+            headers=ORIGIN,
+        )
+        challenge_id = begin.json()["challengeId"]
+        with patch(
+            "services.webauthn_service.verify_registration_response",
+            side_effect=ValueError("bad attestation"),
+        ):
+            finish = client.post(
+                "/api/auth/webauthn/register/finish",
+                json={
+                    "challenge_id": challenge_id,
+                    "credential": {
+                        "id": bytes_to_base64url(b"test-credential-id-bytes"),
+                        "rawId": bytes_to_base64url(b"test-credential-id-bytes"),
+                        "type": "public-key",
+                        "response": {
+                            "clientDataJSON": base64.b64encode(b"{}").decode(),
+                            "attestationObject": base64.b64encode(b"att").decode(),
+                        },
+                    },
+                },
+                headers=ORIGIN,
+            )
+        assert finish.status_code == 400
+        db = SessionLocal()
+        assert db.query(User).filter(User.email == email.lower()).first() is None
+        db.close()
     def _seed_user_with_cred(self):
         email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
         user_id = str(uuid.uuid4())

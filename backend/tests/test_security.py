@@ -131,41 +131,34 @@ class TestRegistration:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestLogin:
-    """Tests for POST /api/auth/login"""
+    """Tests for POST /api/auth/login — password sign-in is closed."""
 
-    def test_login_correct_credentials(self):
-        """Login with correct credentials — expect 200 + JWT token."""
+    def test_login_correct_credentials_closed(self):
         create_password_user(VALID_EMAIL, VALID_PASS)
         resp = client.post("/api/auth/login", json={
             "email": VALID_EMAIL, "password": VALID_PASS,
         })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "access_token" in data
-        assert data["token_type"] == "bearer"
+        assert resp.status_code == 403
+        assert "closed" in resp.json()["detail"].lower()
 
-    def test_login_wrong_password(self):
-        """Login with wrong password — expect 401."""
+    def test_login_wrong_password_closed(self):
         resp = client.post("/api/auth/login", json={
             "email": VALID_EMAIL, "password": "WrongPassword123!",
         })
-        assert resp.status_code == 401
+        assert resp.status_code == 403
 
-    def test_login_nonexistent_user(self):
-        """Login with non-existent user — expect 401 (same as wrong password)."""
+    def test_login_nonexistent_user_closed(self):
         resp = client.post("/api/auth/login", json={
             "email": "nobody@nowhere.com", "password": "SomePassword123!",
         })
-        assert resp.status_code == 401
+        assert resp.status_code == 403
 
-    def test_login_sql_injection_password(self):
-        """Login with SQL injection in password — safe handling."""
+    def test_login_sql_injection_password_closed(self):
         resp = client.post("/api/auth/login", json={
             "email": VALID_EMAIL,
             "password": "' OR '1'='1'; DROP TABLE users; --",
         })
-        # Should be 401 (wrong password) — NOT a 500 crash
-        assert resp.status_code == 401
+        assert resp.status_code == 403
 
     def test_login_empty_fields(self):
         """Login with empty fields — expect 422."""
@@ -187,12 +180,17 @@ class TestLogin:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_valid_token():
-    """Helper — get a valid access token."""
+    """Helper — mint an access token for the seeded password user."""
     create_password_user(VALID_EMAIL, VALID_PASS)
-    resp = client.post("/api/auth/login", json={
-        "email": VALID_EMAIL, "password": VALID_PASS,
-    })
-    return resp.json()["access_token"]
+    from database import SessionLocal
+    from models import User
+    from services.auth_service import create_access_token
+    db = SessionLocal()
+    user = db.query(User).filter(User.email == VALID_EMAIL.lower()).first()
+    uid = user.id
+    sv = user.session_version or 0
+    db.close()
+    return create_access_token(uid, session_version=sv)
 
 
 class TestJWT:
@@ -256,16 +254,11 @@ class TestJWT:
         assert "password" not in str(payload).lower()
         assert "hash" not in str(payload).lower()
         assert "secret" not in str(payload).lower()
-        # Should only contain: sub, exp, type
-        assert set(payload.keys()).issubset({"sub", "exp", "type", "iat", "nbf"})
+        # Should only contain: sub, exp, type, sv
+        assert set(payload.keys()).issubset({"sub", "exp", "type", "sv", "iat", "nbf"})
 
     def test_refresh_token_cannot_access_protected(self):
         """A refresh token should NOT work as an access token."""
-        # Login + get refresh cookie, then try to use it as Bearer
-        login_resp = client.post("/api/auth/login", json={
-            "email": VALID_EMAIL, "password": VALID_PASS,
-        })
-        # Manually create a refresh-type token
         refresh = jwt.encode(
             {"sub": "fake-user-id", "type": "refresh"},
             JWT_SECRET, algorithm=ALGORITHM,
@@ -285,8 +278,13 @@ class TestAuthorization:
         """Helper — create a user, login, add a vendor, return (token, vendor_id)."""
         email = f"authtest_{email_suffix}_{uuid.uuid4().hex[:6]}@example.com"
         create_password_user(email, VALID_PASS)
-        login = client.post("/api/auth/login", json={"email": email, "password": VALID_PASS})
-        token = login.json()["access_token"]
+        from database import SessionLocal
+        from models import User
+        from services.auth_service import create_access_token
+        db = SessionLocal()
+        user = db.query(User).filter(User.email == email.lower()).first()
+        token = create_access_token(user.id, session_version=user.session_version or 0)
+        db.close()
         headers = {"Authorization": f"Bearer {token}"}
         v = client.post("/api/vendors/", json={
             "name": f"TestVendor-{email_suffix}",
@@ -342,15 +340,20 @@ class TestPasswordSecurity:
         """Verify password is not returned in any API response."""
         email = f"nopw_{uuid.uuid4().hex[:8]}@example.com"
         create_password_user(email, VALID_PASS)
-        token = client.post("/api/auth/login", json={
-            "email": email, "password": VALID_PASS,
-        }).json()["access_token"]
+        from database import SessionLocal
+        from models import User
+        from services.auth_service import create_access_token
+        db = SessionLocal()
+        user = db.query(User).filter(User.email == email.lower()).first()
+        token = create_access_token(user.id, session_version=user.session_version or 0)
+        db.close()
         headers = {"Authorization": f"Bearer {token}"}
-        # Check login response
+        me = client.get("/api/auth/me", headers=headers)
+        body = str(me.json())
         login_resp = client.post("/api/auth/login", json={
             "email": email, "password": VALID_PASS,
         })
-        body = str(login_resp.json())
+        body += str(login_resp.json())
         assert VALID_PASS not in body
         assert "password_hash" not in body
         assert "$2b$" not in body

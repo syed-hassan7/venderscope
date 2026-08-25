@@ -1,7 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import {
-  login as apiLogin,
   logout as apiLogout,
   refresh as apiRefresh,
   webauthnAssertBegin,
@@ -108,12 +107,6 @@ export function AuthProvider({ children }) {
     return _loadMe()
   }
 
-  const login = async (email, password) => {
-    const { data } = await apiLogin({ email, password })
-    await _applySession(data.access_token)
-    return data
-  }
-
   const loginWithPasskey = async (email) => {
     if (!isWebAuthnSupported()) throw new Error('Passkeys are not supported in this browser')
     await _wakeBackend()
@@ -133,7 +126,7 @@ export function AuthProvider({ children }) {
   const registerWithPasskey = async (email) => {
     if (!isWebAuthnSupported()) throw new Error('Passkeys are not supported in this browser')
     await _wakeBackend()
-    const { data: options } = await webauthnRegisterBegin({ email })
+    const { data: options } = await webauthnRegisterBegin(email ? { email } : {})
     const payload = await createPasskey(options)
     const { data } = await webauthnRegisterFinish(payload)
     await _applySession(data.access_token)
@@ -158,10 +151,10 @@ export function AuthProvider({ children }) {
         loading,
         authError,
         retryAuth,
-        login,
         loginWithPasskey,
         loginWithRecovery,
         registerWithPasskey,
+        refreshMe: _loadMe,
         logout: logoutUser,
       }}
     >

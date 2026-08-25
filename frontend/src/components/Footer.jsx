@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import DeleteAccountModal from './DeleteAccountModal'
+import RecoveryCodesModal from './RecoveryCodesModal'
+import SignInMethodsModal from './SignInMethodsModal'
 import VSLogo from './VSLogo'
 import { CONSENT_SETTINGS_EVENT } from '../consent/siteConsent'
 
@@ -27,6 +29,8 @@ const FooterLink = ({ to, children, external }) =>
 
 export default function Footer() {
   const [showDelete, setShowDelete] = useState(false)
+  const [showRecovery, setShowRecovery] = useState(false)
+  const [showSignIn, setShowSignIn] = useState(false)
   const openCookieSettings = () => {
     window.dispatchEvent(new Event(CONSENT_SETTINGS_EVENT))
   }
@@ -65,22 +69,47 @@ export default function Footer() {
           <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 mt-4 text-center sm:text-left">
             <p className="text-xs leading-relaxed" style={{ color: 'var(--lo)' }}>
               © {new Date().getFullYear()} VenderScope · Continuous Passive Vendor Risk Intelligence · MIT Licence
+              <span className="block sm:inline sm:before:content-['·'] sm:before:mx-2">
+                New accounts: Google, then a passkey. Password sign-in is closed.
+              </span>
             </p>
 
-            <button
-              onClick={() => setShowDelete(true)}
-              className="text-xs transition-colors duration-150"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--lo)' }}
-              onMouseEnter={(e) => e.currentTarget.style.color = 'var(--risk-high)'}
-              onMouseLeave={(e) => e.currentTarget.style.color = 'var(--lo)'}
-            >
-              Delete Account
-            </button>
+            <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-5">
+              <button
+                onClick={() => setShowSignIn(true)}
+                className="text-xs transition-colors duration-150"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--lo)' }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-l)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--lo)'}
+              >
+                Sign-in methods
+              </button>
+              <button
+                onClick={() => setShowRecovery(true)}
+                className="text-xs transition-colors duration-150"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--lo)' }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-l)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--lo)'}
+              >
+                Recovery codes
+              </button>
+              <button
+                onClick={() => setShowDelete(true)}
+                className="text-xs transition-colors duration-150"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--lo)' }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--risk-high)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--lo)'}
+              >
+                Delete Account
+              </button>
+            </div>
           </div>
         </div>
       </footer>
 
       {showDelete && <DeleteAccountModal onClose={() => setShowDelete(false)} />}
+      {showRecovery && <RecoveryCodesModal onClose={() => setShowRecovery(false)} />}
+      {showSignIn && <SignInMethodsModal onClose={() => setShowSignIn(false)} />}
     </>
   )
 }

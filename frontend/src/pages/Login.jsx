@@ -5,16 +5,14 @@ import { googleLoginStart } from '../api/client'
 import VSLogo from '../components/VSLogo'
 
 export default function Login() {
-  const { login, loginWithPasskey, loginWithRecovery, user } = useAuth()
+  const { loginWithPasskey, loginWithRecovery, user } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const accountDeleted = searchParams.get('deleted') === '1'
   const googleError = searchParams.get('error') === 'google_conflict'
 
   const [email, setEmail]       = useState('')
-  const [password, setPassword] = useState('')
   const [recoveryCode, setRecoveryCode] = useState('')
-  const [mode, setMode]         = useState('password')
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [visible, setVisible]   = useState(false)
@@ -34,11 +32,7 @@ export default function Login() {
     setError('')
     setLoading(true)
     try {
-      if (mode === 'recovery') {
-        await loginWithRecovery(email, recoveryCode)
-      } else {
-        await login(email, password)
-      }
+      await loginWithRecovery(email, recoveryCode)
       navigate('/', { replace: true })
     } catch (err) {
       const detail = err.response?.data?.detail
@@ -126,7 +120,7 @@ export default function Login() {
               color: '#ff6b6b',
               textAlign: 'center',
             }}>
-              That Google account matches an existing email. Sign in with password or passkey first, then link Google.
+              That Google account matches an existing email. Sign in with a passkey or recovery code, then link Google from Sign-in methods.
             </div>
           </div>
         )}
@@ -168,7 +162,7 @@ export default function Login() {
             Sign in to your workspace
           </p>
 
-          <form onSubmit={handleSubmit} method="post" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
             <div style={reveal(460)}>
               <LoginField
@@ -180,37 +174,10 @@ export default function Login() {
                 autoComplete="email"
                 inputRef={emailRef}
               />
+              <p style={{ fontSize: 11, color: 'var(--lo)', marginTop: 7, lineHeight: 1.4 }}>
+                Optional for a passkey. Required for a recovery code.
+              </p>
             </div>
-
-            <div style={reveal(540)}>
-              {mode === 'recovery' ? (
-                <LoginField
-                  label="Recovery code"
-                  type="text"
-                  value={recoveryCode}
-                  onChange={setRecoveryCode}
-                  placeholder="XXXX-XXXX-XXXX-XXXX"
-                  autoComplete="one-time-code"
-                />
-              ) : (
-                <LoginField
-                  label="Password"
-                  type="password"
-                  value={password}
-                  onChange={setPassword}
-                  placeholder="••••••••"
-                  autoComplete="current-password"
-                />
-              )}
-            </div>
-
-            <p style={{ fontSize: 11, color: 'var(--lo)' }}>
-              {mode === 'recovery' ? (
-                <button type="button" onClick={() => setMode('password')} style={linkBtnStyle}>Use password instead</button>
-              ) : (
-                <button type="button" onClick={() => setMode('recovery')} style={linkBtnStyle}>Use a recovery code</button>
-              )}
-            </p>
 
             {error && (
               <div style={{
@@ -232,10 +199,11 @@ export default function Login() {
               </div>
             )}
 
-            <div style={{ marginTop: 6, ...reveal(620) }}>
+            <div style={{ marginTop: 6, ...reveal(540) }}>
               <button
-                type="submit"
+                type="button"
                 disabled={loading}
+                onClick={handlePasskeyLogin}
                 style={{
                   width: '100%',
                   minHeight: 46,
@@ -252,6 +220,7 @@ export default function Login() {
                   transition: 'all 200ms ease',
                   position: 'relative',
                 }}
+                aria-label="Sign in with passkey"
                 onMouseEnter={(e) => {
                   if (!loading) {
                     e.currentTarget.style.background = 'linear-gradient(135deg, #9b6cf6 0%, #8b4ced 100%)'
@@ -267,20 +236,11 @@ export default function Login() {
                 onMouseDown={(e) => { if (!loading) e.currentTarget.style.transform = 'translateY(0) scale(0.98)' }}
                 onMouseUp={(e) => { if (!loading) e.currentTarget.style.transform = 'translateY(-1px) scale(1)' }}
               >
-                {loading ? <SpinnerRow label="Signing in…" /> : (mode === 'recovery' ? 'Sign in with code' : 'Sign in')}
+                {loading ? <SpinnerRow label="Signing in…" /> : 'Sign in with passkey'}
               </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, ...reveal(680) }}>
-              <button
-                type="button"
-                disabled={loading}
-                onClick={handlePasskeyLogin}
-                style={altBtnStyle}
-                aria-label="Sign in with passkey"
-              >
-                Sign in with passkey
-              </button>
+            <div style={reveal(620)}>
               <button
                 type="button"
                 onClick={() => googleLoginStart()}
@@ -290,7 +250,49 @@ export default function Login() {
                 Continue with Google
               </button>
             </div>
-          </form>
+
+            <details style={{ marginTop: 4, ...reveal(700) }}>
+              <summary style={{
+                cursor: 'pointer',
+                fontSize: 12,
+                color: 'var(--accent-l)',
+                fontWeight: 500,
+              }}>
+                Recovery code
+              </summary>
+              <form onSubmit={handleSubmit} method="post" style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
+                <LoginField
+                  label="Recovery code"
+                  type="text"
+                  value={recoveryCode}
+                  onChange={setRecoveryCode}
+                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                  autoComplete="one-time-code"
+                />
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    width: '100%',
+                    minHeight: 46,
+                    padding: '12px 20px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                    color: '#fff',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    letterSpacing: '0.02em',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    opacity: loading ? 0.75 : 1,
+                    transition: 'all 200ms ease',
+                  }}
+                >
+                  {loading ? <SpinnerRow label="Signing in…" /> : 'Sign in with code'}
+                </button>
+              </form>
+            </details>
+          </div>
         </div>
 
         {/* Footer links */}
@@ -330,6 +332,16 @@ export default function Login() {
           ...reveal(820),
         }}>
           VenderScope · Vendor Risk Intelligence
+        </p>
+        <p style={{
+          marginTop: 6,
+          textAlign: 'center',
+          fontSize: 11,
+          color: 'var(--lo)',
+          lineHeight: 1.45,
+          ...reveal(860),
+        }}>
+          New accounts: Google, then a passkey. Password sign-in is closed.
         </p>
       </div>
     </div>
@@ -412,12 +424,3 @@ const altBtnStyle = {
   cursor: 'pointer',
 }
 
-const linkBtnStyle = {
-  background: 'none',
-  border: 'none',
-  color: 'var(--accent-l)',
-  fontSize: 11,
-  cursor: 'pointer',
-  padding: 0,
-  textDecoration: 'underline',
-}

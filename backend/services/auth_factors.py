@@ -28,8 +28,6 @@ def get_user_factors(db: Session, user: User) -> dict:
 
 def count_login_factors(db: Session, user: User) -> int:
     n = 0
-    if user.password_hash:
-        n += 1
     if user.google_sub:
         n += 1
     n += passkey_count(db, user.id)
@@ -39,9 +37,17 @@ def count_login_factors(db: Session, user: User) -> int:
 
 
 def can_remove_passkey(db: Session, user: User) -> bool:
-    """False if deleting the last passkey would leave no login method."""
+    """False if deleting the last passkey would leave no remaining login method.
+
+    Password hashes are step-up only — they do not count as a sign-in method.
+    """
     if passkey_count(db, user.id) <= 1:
-        if user.password_hash or user.google_sub or unused_recovery_count(db, user.id) > 0:
-            return True
-        return False
+        return user.google_sub is not None
     return True
+
+
+def can_unlink_google(db: Session, user: User) -> bool:
+    """False if Google is not linked, or unlinking would leave no remaining login method."""
+    if user.google_sub is None:
+        return False
+    return passkey_count(db, user.id) > 0

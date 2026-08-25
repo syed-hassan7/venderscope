@@ -49,7 +49,7 @@ Set on the HF Space (not in git):
 | `GOOGLE_REDIRECT_URI` | `https://venderscope.vercel.app/api/auth/google/callback` |
 | `RECOVERY_CODE_PEPPER` | Long random secret for recovery-code hashing |
 
-Google Cloud OAuth client: authorized origin `https://venderscope.vercel.app` (+ localhost for dev).
+Google Cloud OAuth client: authorized origin `https://venderscope.vercel.app` (+ localhost for dev). Linking Google from the app is a credentialed POST to `/api/auth/google/link/start` (not a GET).
 
 ## Structure
 
@@ -72,6 +72,8 @@ src/
 │   ├── CompliancePanel.jsx
 │   ├── AddVendorModal.jsx
 │   ├── DeleteAccountModal.jsx
+│   ├── RecoveryCodesModal.jsx
+│   ├── SignInMethodsModal.jsx
 │   ├── QuotaBanner.jsx
 │   ├── VendorAvatar.jsx
 │   └── Footer.jsx

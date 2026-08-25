@@ -5,7 +5,6 @@ import { getVendors, addVendor, deleteVendor, scanVendor, scanAll, getDashboardS
 import VendorCard from '../components/VendorCard'
 import AddVendorModal from '../components/AddVendorModal'
 import QuotaBanner from '../components/QuotaBanner'
-import Footer from '../components/Footer'
 import { useAuth } from '../auth/AuthContext'
 import PageBackground from '../components/PageBackground'
 import { parseApiDate } from '../utils/datetime'
@@ -497,8 +496,6 @@ export default function Dashboard() {
       {showModal && (
         <AddVendorModal onAdd={handleAdd} onClose={() => setShowModal(false)} />
       )}
-
-      <Footer />
     </div>
   )
 }

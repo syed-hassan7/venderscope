@@ -65,6 +65,14 @@ def store_recovery_codes(db: Session, user_id: str, plain_codes: list[str]) -> N
     db.commit()
 
 
+def replace_recovery_codes(db: Session, user_id: str) -> list[str]:
+    db.query(RecoveryCodeHash).filter(RecoveryCodeHash.user_id == user_id).delete()
+    db.commit()
+    codes = generate_plain_codes()
+    store_recovery_codes(db, user_id, codes)
+    return codes
+
+
 def consume_recovery_code(db: Session, user_id: str, code: str) -> bool:
     rows = (
         db.query(RecoveryCodeHash)

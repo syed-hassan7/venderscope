@@ -16,7 +16,7 @@ from config import (
 from database import engine, Base, _is_sqlite
 import models
 from limiter import limiter
-from routers import vendors, intelligence, export, quota, auth
+from routers import vendors, intelligence, export, quota, auth, account_factors
 from routers.dashboard import router as dashboard_router
 from routers.guest import router as guest_router
 from routers.acceptances import router as acceptances_router
@@ -75,6 +75,9 @@ if not _is_sqlite:
         """))
         _conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(128)"))
         _conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER DEFAULT 0 NOT NULL"
+        ))
+        _conn.execute(text(
             "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"
         ))
         _conn.commit()
@@ -86,6 +89,9 @@ if _is_sqlite:
         if "google_sub" not in _user_cols:
             _conn.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR(128)"))
             print("[Migration] Added column: users.google_sub")
+        if "session_version" not in _user_cols:
+            _conn.execute(text("ALTER TABLE users ADD COLUMN session_version INTEGER DEFAULT 0 NOT NULL"))
+            print("[Migration] Added column: users.session_version")
         # SQLite cannot DROP NOT NULL easily; password_hash stays NOT NULL on old DBs until
         # recreated — new installs get nullable from models. Tests use fresh create_all.
         _conn.commit()
@@ -171,6 +177,7 @@ app.add_middleware(EnsureCorsCredentialsMiddleware)
 
 # Auth routes — rate limits applied inline with @limiter.limit
 app.include_router(auth.router,        prefix="/api/auth",        tags=["Auth"])
+app.include_router(account_factors.router, prefix="/api/auth",    tags=["Auth"])
 app.include_router(vendors.router,     prefix="/api/vendors",     tags=["Vendors"])
 app.include_router(intelligence.router,prefix="/api/intelligence",tags=["Intelligence"])
 app.include_router(export.router,      prefix="/api/export",      tags=["Export"])

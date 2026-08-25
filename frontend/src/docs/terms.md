@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Last updated:** 23 March 2026
+**Last updated:** 25 August 2026
 **Effective date:** 23 March 2026
 
 Please read these Terms of Service ("Terms") carefully before using VenderScope.
@@ -39,7 +39,7 @@ You must be at least 18 years old and have the authority to enter into these Ter
 
 ### 4.1 Account Security
 You are responsible for:
-- Keeping your password secure and confidential
+- Protecting your passkeys, Google account, and recovery codes
 - All activity that occurs under your account
 - Notifying us immediately at syedzrk1000@gmail.com if you suspect unauthorised access
 
