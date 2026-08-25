@@ -10,6 +10,7 @@ import PageBackground from '../components/PageBackground'
 import RiskBadge, { riskLevel } from '../components/RiskBadge'
 import Toast from '../components/Toast'
 import Tabs, { TabPanel } from '../components/Tabs'
+import Select from '../components/Select'
 import { formatApiDateTime, parseApiDate } from '../utils/datetime'
 
 const SEVERITY_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
@@ -645,25 +646,15 @@ export default function VendorDetail() {
                     {(() => {
                       const current = vendor.data_sensitivity || 'standard'
                       return (
-                        <select
+                        <Select
                           value={current}
-                          onChange={(e) => handleContextChange(e.target.value)}
-                          aria-label="Data sensitivity"
-                          className="w-full py-2.5 px-3 rounded-lg text-[12px] outline-none"
-                          style={{
-                            background: 'var(--elevated)',
-                            border: '1px solid var(--border)',
-                            color: 'var(--hi)',
-                            cursor: 'pointer',
-                            colorScheme: 'dark',
-                          }}
-                        >
-                          {SENSITIVITY_OPTIONS.map(({ value, label, hint }) => (
-                            <option key={value} value={value}>
-                              {label} — {hint}{value === 'standard' ? ' (default)' : ''}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={handleContextChange}
+                          ariaLabel="Data sensitivity"
+                          options={SENSITIVITY_OPTIONS.map(({ value, label, hint }) => ({
+                            value,
+                            label: `${label} — ${hint}${value === 'standard' ? ' (default)' : ''}`,
+                          }))}
+                        />
                       )
                     })()}
                   </div>
@@ -700,26 +691,14 @@ export default function VendorDetail() {
                         { value: '365',  label: 'Annually' },
                       ]
                       return (
-                        <select
-                          value={current === null ? 'none' : String(current)}
-                          onChange={(e) => {
-                            const v = e.target.value
-                            handleReviewUpdate({ interval_days: v === 'none' ? null : Number(v) })
-                          }}
-                          aria-label="Review schedule"
-                          className="w-full mb-2 py-2.5 px-3 rounded-lg text-[12px] outline-none"
-                          style={{
-                            background: 'var(--elevated)',
-                            border: '1px solid var(--border)',
-                            color: 'var(--hi)',
-                            cursor: 'pointer',
-                            colorScheme: 'dark',
-                          }}
-                        >
-                          {REVIEW_OPTIONS.map(({ value, label }) => (
-                            <option key={value} value={value}>{label}</option>
-                          ))}
-                        </select>
+                        <div className="mb-2">
+                          <Select
+                            value={current === null ? 'none' : String(current)}
+                            onChange={(v) => handleReviewUpdate({ interval_days: v === 'none' ? null : Number(v) })}
+                            ariaLabel="Review schedule"
+                            options={REVIEW_OPTIONS}
+                          />
+                        </div>
                       )
                     })()}
 
