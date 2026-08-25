@@ -29,7 +29,10 @@ def _is_same_vendor_site(url: str, base: str) -> bool:
 
 def _safe_get(url: str, timeout: int = 6) -> requests.Response | None:
     try:
-        response = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True, stream=True)
+        response = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=False, stream=True)
+        if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
+            response.close()
+            return None
         final_url = response.url
         final_host = urlparse(final_url).netloc
         if not final_host or not _is_safe_domain(final_host):

@@ -377,7 +377,7 @@ def _probe_doc_paths(base: str, found: dict) -> dict:
         for path in paths:
             url = f"https://{base}{path}"
             try:
-                r = requests.head(url, headers=HEADERS, timeout=5, allow_redirects=True)
+                r = requests.head(url, headers=HEADERS, timeout=5, allow_redirects=False)
                 if r.status_code == 200:
                     result[doc_type] = url
                     break
@@ -455,7 +455,7 @@ def _check_trust_centre(domain: str) -> dict | None:
         if not url.startswith("http"):
             url = f"https://{url}"
         try:
-            r = requests.head(url, headers=HEADERS, timeout=6, allow_redirects=True)
+            r = requests.head(url, headers=HEADERS, timeout=6, allow_redirects=False)
             if r.status_code in (200, 301, 302):
                 body = _fetch_page(url, timeout=6)
                 return {"url": url, "accessible": bool(body and len(body) > 500)}
