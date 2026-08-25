@@ -115,8 +115,9 @@ We share data only in the following limited circumstances:
 | HaveIBeenPwned | Breach lookups | Vendor domain (not user data) | USA |
 | NIST NVD | CVE lookups | Vendor name (not user data) | USA |
 | Shodan | Infrastructure lookups | Vendor domain (not user data) | USA |
-| Google (CSE) | Compliance web search | Vendor name/domain | USA |
-| Resend | Transactional email | Your email address | USA |
+| Tavily | Compliance web search | Vendor name/domain | USA |
+| Google | Sign-in (OAuth 2.0) | Your Google account identifier and verified email, only if you use Google sign-in | USA |
+| Resend | Transactional email | Your email address — integrated but not currently sending live traffic (no verified sending domain configured yet) | USA |
 
 No third party receives your account credentials, your vendor list structure, or your risk scores.
 
@@ -148,7 +149,7 @@ When an account is deleted, vendor data, risk events, score history, compliance 
 You have the following rights. To exercise any of them, email us at syedzrk1000@gmail.com.
 
 ### 7.1 Right of Access (Article 15)
-You have the right to request a copy of all personal data we hold about you. We will respond within **30 days**. You can also export your data directly from the platform (see Settings → Export My Data).
+You have the right to request a copy of all personal data we hold about you. Email us and we will respond within **30 days**. The Risk Register CSV export (Dashboard → Export Register) covers your vendor and risk data today; a dedicated full-account data export is not yet a self-service feature.
 
 ### 7.2 Right to Rectification (Article 16)
 You can correct inaccurate personal data at any time via your account settings.
@@ -168,7 +169,7 @@ Deletion is permanent. Unattributed failed-login audit events may remain until t
 You can ask us to pause processing of your data while a dispute is resolved.
 
 ### 7.5 Right to Data Portability (Article 20)
-You can export all your vendor data and risk history in JSON format via Settings → Export My Data.
+Vendor and risk data can be exported today via the Dashboard's Risk Register CSV export. A full-account JSON export is not yet a self-service feature — email us to request a portable copy of your data.
 
 ### 7.6 Right to Object (Article 21)
 You can object to processing based on legitimate interests. We will stop unless we have compelling legitimate grounds.

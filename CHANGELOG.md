@@ -4,6 +4,44 @@ Historical release notes for VenderScope, extracted from `README.md` to keep it 
 
 ---
 
+## v5.0 — Google-Gated Passkey Authentication & Re-verification Hardening
+
+Passkeys prove control of an authenticator on this origin, not mailbox control — typed-email signup let anyone finish WebAuthn and own an unverified email address. v5.0 replaces the password-based auth system with Google-then-passkey enrollment, and closes a re-verification gap found in an independent review of that work.
+
+- **Password sign-in closed** — `POST /api/auth/login` and `POST /api/auth/register` always return 403. Leftover bcrypt hashes on legacy accounts remain valid for step-up (add a passkey, link Google, delete account) but not for signing in.
+- **Google-gated passkey signup** — new accounts start with Google OIDC (`email_verified`, PKCE, nonce, RS256), which mints a short-lived pending session, then require a passkey to complete enrollment. Identity stored is `google_sub`; email is a label copied from Google. No skip-passkey path.
+- **Passkeys (WebAuthn)** — phishing-resistant sign-in; last passkey cannot be removed unless Google remains linked (password hashes and recovery codes don't count as a login method for this check).
+- **Recovery codes** — 10 one-time codes issued at enrollment, shown once, stored hashed (HMAC-SHA256 + bcrypt). A backup login path, not a way to drop the last passkey or unlink Google.
+- **Session-family kill** — refresh tokens carry a `session_version` claim. Reusing an already-rotated refresh token (JTI already blacklisted) bumps `session_version` and invalidates every outstanding access/refresh token for that user, not just the reused one. Logout does the same, so a leftover 15-minute access token dies immediately instead of surviving until natural expiry.
+- **Step-up on factor changes** — linking Google, adding a second-or-later passkey, and permanently deleting the account all require re-proving identity (existing passkey or password) with a live access token, not just a valid cookie.
+- **Re-verification hardening (this pass)** — adding a *first* passkey to a Google-only account, and disconnecting Google from any account, now also require step-up: Google-only accounts (which have no existing passkey or password to step up with) go through a fresh Google re-authentication that must resolve to the same account already on file; disconnecting Google now requires the same step-up as linking it. Closes a gap where a compromised short-lived session token could change an account's sign-in factors without proving current control. See `docs/SECURITY.md`'s v5.0 audit entry for the full disclosure.
+- **WebAuthn sign-count correctness fix** — the verification library's own clone-detection logic already correctly exempts authenticators that don't track a use counter (common on synced/platform passkeys); an app-side duplicate check lacked that exemption and could have rejected legitimate logins from those authenticators. Removed the duplicate; a genuine clone/replay now returns a clean 401 instead of an unhandled error.
+
+Verification after this pass:
+
+- `python -m pytest -q` → `179 passed`
+- `npm run build` → passed
+- `npm run lint` → no new errors (4 pre-existing, unrelated files)
+
+---
+
+## v4.7 — Per-Scan Search Quota Ceiling
+
+Live production testing on v4.6 (real vendor scans through the hosted app, not just Modal) surfaced a fairness gap: nothing capped how many Tavily units a *single* scan could spend. Worst case — 6 certs × up to 4 query templates, plus 7 security-contact prefixes — was ~21 units for one vendor, not the ~6 `ESTIMATED_SCAN_COST` assumed. Combined with no per-user vendor cap, a vendor-heavy account calling `scan-all` at its rate-limit ceiling could exhaust the entire shared monthly Tavily budget in minutes, locking search out for every user until the next reset.
+
+- **`MAX_SEARCH_UNITS_PER_SCAN = 6`** — `services/compliance_discovery.py`'s `_web_search()` now stops issuing further Tavily calls once a single `run_compliance_discovery()` invocation has net-spent 6 units, reusing the existing `quota_state["used"]` counter (no new state). Matches `ESTIMATED_SCAN_COST`, so the "estimated full scans remaining" figure now reflects a real ceiling instead of an average
+- **Global exhaustion stays separate** — the per-scan cap only returns `[]` early; it never touches `quota_state["enabled"]`/`["exhausted"]`, so the quota banner still means what it says (true monthly exhaustion, not one scan hitting its own cap)
+
+**Follow-up fix, same release (round 1):** a live scan surfaced false-positive cert evidence — matches were accepted on bare keyword presence rather than page identity, letting a job posting and an unrelated third-party article count as attestations, plus a contaminated doc link from sitemap parsing picking up another company's marketplace profile page. Fixed with junk-path rejection (jobs/careers/marketplace-listing paths excluded from all doc-discovery stages), word-boundary matching for short tokens (`soc`/`iso`/`dpa`), and a two-gate Tavily result filter (vendor relevance + not-junk) with real hostname matching instead of substring checks.
+
+**Follow-up fix, same release (round 2):** a second live scan on the same vendor still surfaced 3 more false positives — two came from `CREDIBLE_DOMAINS` bodies (`ncsc.gov.uk`, `pcisecuritystandards.org`) publishing generic scheme-overview/blog content that never named the vendor; membership in that domain list was being treated as sufficient evidence on its own. Fixed by requiring an actual vendor mention even on a credible domain. The third — a third-party "AI tools" directory page that happened to name-drop the vendor while discussing something else, on a dead/404 URL — passed every deterministic gate cleanly, because it *does* mention the vendor; this is the boundary of what path/keyword heuristics can close (the space of third-party directory/aggregator sites is effectively unenumerable). An LLM-based audit fallback pass, scoped in round 1 but deferred as unnecessary paid-dependency polish, is now the planned fix for this remaining class rather than optional UX — two consecutive rounds of fresh false positives from unenumerated page shapes is the evidence that a third heuristic-gate pass won't close it.
+
+Verification after this pass:
+
+- `python -m pytest -q` → `166 passed`
+
+---
+
 ## v4.6 — Tavily Web Search & Modal Cron Scan
 
 Google Custom Search JSON API started 403ing on every request even with the API enabled and a correctly-scoped key — root cause traced to Google's undocumented billing-account requirement, which broke the goal of keeping this build genuinely no-cost. Compliance web search was swapped to Tavily. Separately, the nightly vendor scan gained a second, more reliable scheduling path via Modal's native Cron.

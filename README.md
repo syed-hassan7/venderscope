@@ -2,10 +2,10 @@
 
 > **Still running annual vendor audits? Your next breach won't wait 12 months.**
 
-[![Live Beta - v4.7](https://img.shields.io/badge/Live%20Demo-venderscope.vercel.app-6366f1?style=for-the-badge)](https://venderscope.vercel.app)
+[![Live Beta - v5.0](https://img.shields.io/badge/Live%20Demo-venderscope.vercel.app-6366f1?style=for-the-badge)](https://venderscope.vercel.app)
 [![API](https://img.shields.io/badge/API-darkitowo--venderscope--api.hf.space-10b981?style=for-the-badge)](https://darkitowo-venderscope-api.hf.space/docs)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Zarak%20Hassan-0A66C2?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/zarak-hassan7/)
-[![Version](https://img.shields.io/badge/version-v4.7-violet?style=for-the-badge)](https://github.com/darkyzowo/venderscope/releases)
+[![Version](https://img.shields.io/badge/version-v5.0-violet?style=for-the-badge)](https://github.com/syed-hassan7/venderscope/releases)
 
 > **Performance note:** VenderScope backend runs on Hugging Face Spaces (Docker, 2vCPU/16GB RAM). Free-tier Spaces still idle-sleep on inactivity — UptimeRobot pings every 5 minutes to minimize that, but a cold boot (~30–50s) can still happen after a gap in traffic or an HF-side restart. Actual scan time once warm is 8–15s using concurrent API calls to HIBP, NVD, Companies House, Shodan, and the compliance engine simultaneously.
 
@@ -13,24 +13,14 @@ VenderScope is a continuous, passive vendor risk intelligence platform built for
 
 ---
 
-## Latest Release — v4.7: Per-Scan Search Quota Ceiling
+## Latest Release — v5.0: Google-Gated Passkey Authentication
 
-Live production testing on v4.6 (real vendor scans through the hosted app, not just Modal) surfaced a fairness gap: nothing capped how many Tavily units a *single* scan could spend. Worst case — 6 certs × up to 4 query templates, plus 7 security-contact prefixes — was ~21 units for one vendor, not the ~6 `ESTIMATED_SCAN_COST` assumed. Combined with no per-user vendor cap, a vendor-heavy account calling `scan-all` at its rate-limit ceiling could exhaust the entire shared monthly Tavily budget in minutes, locking search out for every user until the next reset.
+Auth was rebuilt around Google-then-passkey enrollment instead of passwords — passkeys prove control of an authenticator on this origin, not mailbox control, so signup now gates on a verified Google identity first. Password sign-in is closed; recovery codes and session-family invalidation (a stolen refresh token can't outlive a rotation) round out the model. A follow-up hardening pass closed a re-verification gap where changing an account's Google/passkey sign-in factors didn't always require re-proving control of the account, and corrected a WebAuthn sign-count check to match the verification library's own (more permissive and correct) logic.
 
-- **`MAX_SEARCH_UNITS_PER_SCAN = 6`** — `services/compliance_discovery.py`'s `_web_search()` now stops issuing further Tavily calls once a single `run_compliance_discovery()` invocation has net-spent 6 units, reusing the existing `quota_state["used"]` counter (no new state). Matches `ESTIMATED_SCAN_COST`, so the "estimated full scans remaining" figure now reflects a real ceiling instead of an average
-- **Global exhaustion stays separate** — the per-scan cap only returns `[]` early; it never touches `quota_state["enabled"]`/`["exhausted"]`, so the quota banner still means what it says (true monthly exhaustion, not one scan hitting its own cap)
+- `python -m pytest -q` → `179 passed`
+- `npm run build` → passed
 
-**Follow-up fix, same release (round 1):** a live scan surfaced false-positive cert evidence — matches were accepted on bare keyword presence rather than page identity, letting a job posting and an unrelated third-party article count as attestations, plus a contaminated doc link from sitemap parsing picking up another company's marketplace profile page. Fixed with junk-path rejection (jobs/careers/marketplace-listing paths excluded from all doc-discovery stages), word-boundary matching for short tokens (`soc`/`iso`/`dpa`), and a two-gate Tavily result filter (vendor relevance + not-junk) with real hostname matching instead of substring checks.
-
-**Follow-up fix, same release (round 2):** a second live scan on the same vendor still surfaced 3 more false positives — two came from `CREDIBLE_DOMAINS` bodies (`ncsc.gov.uk`, `pcisecuritystandards.org`) publishing generic scheme-overview/blog content that never named the vendor; membership in that domain list was being treated as sufficient evidence on its own. Fixed by requiring an actual vendor mention even on a credible domain. The third — a third-party "AI tools" directory page that happened to name-drop the vendor while discussing something else, on a dead/404 URL — passed every deterministic gate cleanly, because it *does* mention the vendor; this is the boundary of what path/keyword heuristics can close (the space of third-party directory/aggregator sites is effectively unenumerable). An LLM-based audit fallback pass, scoped in round 1 but deferred as unnecessary paid-dependency polish, is now the planned fix for this remaining class rather than optional UX — two consecutive rounds of fresh false positives from unenumerated page shapes is the evidence that a third heuristic-gate pass won't close it.
-
-**Follow-up fix, same release (auth hardening):** password sign-in is closed (`POST /api/auth/login` → 403). Linking Google is POST-only with a live access token plus passkey or password step-up. Adding a passkey while logged in requires the same step-up. Refresh and logout fail closed without Origin/Referer. Reuse of a revoked refresh JTI increments `session_version` and kills the session family; logout does the same so leftover 15-minute access JWTs die immediately. Recovery codes cannot drop the last passkey or unlink Google.
-
-Verification after this pass:
-
-- `python -m pytest -q` → `166 passed`
-
-Full version history: [`CHANGELOG.md`](CHANGELOG.md)
+Full version history, including the exact fixes in this pass: [`CHANGELOG.md`](CHANGELOG.md)
 
 ---
 
@@ -48,6 +38,7 @@ Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 ### Password Reset / Profile Page
 - Password **sign-in is closed**. There is no password-reset mailer. Use a passkey, Google, or a recovery code.
 - Legacy bcrypt hashes may remain for step-up (add passkey, link Google, delete account) until you remove them by replacing factors.
+- Adding a first passkey to a Google-only account, and disconnecting Google from any account, both require re-verification (fresh Google re-authentication or existing step-up, as applicable) — see `docs/SECURITY.md`'s v5.0 audit entry.
 
 ### Scheduler & Hosting
 - Nightly scan currently has two paths: the original APScheduler job (behind a DB-backed `SchedulerLease`, still authoritative) and, as of v4.6, an alternate Modal Cron path — gated by `ENABLE_LEGACY_NIGHTLY_SCAN` so only one runs. Per-user scheduler scoping (so users only get alerts for their own vendors) is still on the roadmap.
@@ -116,17 +107,35 @@ Full version history: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Architecture
 
+```mermaid
+graph LR
+    User((User)) --> FE["Frontend<br/>React · Vercel"]
+    FE -->|"same-origin /api"| API["FastAPI Backend<br/>Hugging Face Spaces"]
+    API --> DB[("PostgreSQL<br/>Supabase")]
+    API --> Auth["Auth<br/>Google OIDC + WebAuthn"]
+    API --> Scanner["Scan Orchestrator"]
+    Scanner --> HIBP["HaveIBeenPwned"]
+    Scanner --> NVD["NVD / NIST"]
+    Scanner --> CH["Companies House"]
+    Scanner --> Shodan["Shodan"]
+    Scanner --> Tavily["Tavily Search"]
+    API -.optional, no domain configured.-> Resend["Resend Email"]
+```
+
 ```
 VenderScope/
 ├── backend/
 │   ├── main.py                   # FastAPI app, CORS, security headers, lifespan
 │   ├── models.py                 # Vendor, RiskEvent, RiskScoreHistory, User,
 │   │                             #   RevokedToken, AuditLog, VendorNote,
-│   │                             #   RiskAcceptance (SQLAlchemy)
+│   │                             #   RiskAcceptance, WebAuthnCredential,
+│   │                             #   WebAuthnChallenge, RecoveryCodeHash,
+│   │                             #   OAuthState (SQLAlchemy)
 │   ├── database.py               # PostgreSQL + SQLite connection (pg8000, ssl_context)
 │   ├── scheduler.py              # 24hr scan + 6hr JTI cleanup + 10min keep-alive
 │   ├── routers/
-│   │   ├── auth.py               # Register, login, refresh, logout, /me, delete account
+│   │   ├── auth.py               # Passkey/Google auth, refresh, logout, recovery, delete account
+│   │   ├── account_factors.py    # List/remove passkeys, disconnect Google (step-up gated)
 │   │   ├── vendors.py            # Vendor CRUD, notes, review scheduling (all user-scoped)
 │   │   ├── acceptances.py        # Risk acceptance lifecycle (create, list, revoke)
 │   │   ├── intelligence.py       # Scan trigger endpoints
@@ -135,7 +144,11 @@ VenderScope/
 │   │   └── quota.py              # Global search quota status
 │   └── services/
 │       ├── scanner.py            # Concurrent scan orchestrator + caching
-│       ├── auth_service.py       # JWT encode/decode, password hash, get_current_user
+│       ├── auth_service.py       # JWT encode/decode, bcrypt step-up hash, get_current_user
+│       ├── auth_factors.py       # Passkey/Google/recovery factor counting, step-up gate
+│       ├── webauthn_service.py   # Passkey registration + authentication ceremonies
+│       ├── google_oauth_service.py # Google OIDC (PKCE, nonce) — login, link, re-auth step-up
+│       ├── recovery_service.py   # One-time recovery code generation + hashed verification
 │       ├── audit.py              # Append-only security event recorder
 │       ├── alerts.py             # Resend HTTP API + Gmail SMTP dispatcher
 │       ├── compliance_discovery.py  # Two-stage compliance + cert discovery
@@ -149,8 +162,8 @@ VenderScope/
 └── frontend/
     └── src/
         ├── pages/
-        │   ├── Login.jsx             # Auth: login form + deleted account banner
-        │   ├── Register.jsx          # Auth: register with client-side complexity rules
+        │   ├── Login.jsx             # Passkey + Google sign-in, recovery code fallback
+        │   ├── Register.jsx          # Google-first enrollment, then passkey
         │   ├── Dashboard.jsx         # Main vendor overview
         │   ├── VendorDetail.jsx      # Per-vendor risk detail + profile panel
         │   └── DocPage.jsx           # Lightweight markdown renderer for /privacy, /terms, /security
@@ -161,9 +174,11 @@ VenderScope/
         │   ├── AddVendorModal.jsx    # Add vendor form
         │   ├── CompliancePanel.jsx   # Compliance posture with badge system
         │   ├── QuotaBanner.jsx       # Daily scan quota tracker
-        │   ├── Footer.jsx            # Links to docs + delete account trigger
+        │   ├── SignInMethodsModal.jsx # List/remove passkeys, link/disconnect Google
+        │   ├── RecoveryCodesModal.jsx # View/regenerate recovery codes
+        │   ├── Footer.jsx            # Links to docs + sign-in methods + delete account
         │   └── DeleteAccountModal.jsx # 2-step account deletion (type "DELETE" to confirm)
-        ├── contexts/AuthContext.jsx  # JWT access token in memory, silent refresh
+        ├── auth/AuthContext.jsx      # JWT access token in memory, silent refresh
         ├── docs/
         │   ├── privacy.md
         │   ├── terms.md
@@ -208,6 +223,16 @@ ALERT_THRESHOLD=70
 
 # Auth
 JWT_SECRET=your_64_char_hex_secret
+RECOVERY_CODE_PEPPER=your_recovery_code_pepper   # required in production
+
+# Google Sign-In (OAuth 2.0 / OIDC)
+GOOGLE_CLIENT_ID=your_google_oauth_client_id
+GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
+# GOOGLE_REDIRECT_URI=                # optional — defaults to {FRONTEND_URL}/api/auth/google/callback
+
+# WebAuthn (passkeys) — both have sane defaults, override for production
+# WEBAUTHN_RP_ID=localhost            # must match your frontend's hostname in production
+# WEBAUTHN_RP_NAME=VenderScope
 
 # Frontend (must match your deployed frontend URL in production)
 FRONTEND_URL=http://localhost:5173
@@ -215,6 +240,7 @@ FRONTEND_URL=http://localhost:5173
 # Database (PostgreSQL for production, SQLite for local)
 DATABASE_URL=sqlite:///./vendorscope.db
 # DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+# SUPABASE_CA_CERT_PATH=./certs/supabase-prod-ca.crt   # required for any non-sqlite DATABASE_URL
 ```
 
 ```bash
@@ -253,7 +279,7 @@ VenderScope uses a **dual-token JWT scheme**:
 
 **Logout:** Blacklists the current refresh JTI and increments `session_version`, so outstanding 15-minute access tokens fail immediately.
 
-**Sign-in methods:** New accounts need Google (verified mailbox) then a passkey. Password registration and password sign-in are closed. Passkey, Google, or a one-time recovery code can sign you in. Linking Google or adding another passkey requires step-up (existing passkey or leftover password hash). Recovery codes cannot remove the last passkey.
+**Sign-in methods:** New accounts need Google (verified mailbox) then a passkey. Password registration and password sign-in are closed. Passkey, Google, or a one-time recovery code can sign you in. Linking Google, adding another passkey, and disconnecting Google all require step-up — an existing passkey or leftover password hash, or (for a Google-only account adding its first passkey, which has no other factor to step up with) a fresh Google re-authentication. Recovery codes cannot remove the last passkey.
 
 **Session persistence:** On page load, `AuthContext` calls `/api/auth/refresh` to silently restore the session from the cookie — no re-login needed after browser restart.
 
@@ -286,7 +312,7 @@ VenderScope has undergone a full security audit. Key controls:
 | Input validation | Pydantic validators on all inputs; domain normalised on ingest |
 | Startup checks | FRONTEND_URL validated at startup; server refuses to start if misconfigured |
 
-Full audit findings and remediation notes: `docs/security-architecture.md`
+Full audit findings and remediation notes: [`docs/SECURITY.md`](docs/SECURITY.md)
 
 ---
 
@@ -389,6 +415,11 @@ During every scan, VenderScope passively discovers three data points at no quota
 - [x] Database migration: Neon → Supabase (no compute quota, 500MB free tier) (v4.5)
 - [x] GitHub Actions CI/CD deploy pipeline to HF Spaces (v4.5)
 - [x] `is_production()` generalised — ENV-based, not host-specific (v4.5)
+- [x] Per-scan search quota ceiling + two-gate compliance evidence filter (v4.7)
+- [x] Google-gated passkey authentication — Google OAuth + WebAuthn passkeys + recovery codes, password sign-in closed (v5.0)
+- [x] Session-family kill on refresh-token reuse and logout (v5.0)
+- [x] Auth re-verification hardening — step-up required for Google-only first-passkey add and Google disconnect (v5.0)
+- [ ] Full-account self-service data export (JSON) — vendor/risk CSV export exists; a complete personal-data export does not yet
 - [ ] Vendor Comparison View — side-by-side risk posture for two vendors
 - [ ] Shareable Risk Report — time-limited public read-only vendor snapshot link
 - [ ] Bulk CSV Import — add multiple vendors at once
@@ -409,18 +440,22 @@ Deploy via GitHub Actions (`.github/workflows/deploy-hf.yml`) — triggers on pu
 Required secrets on HF Space (Settings → Variables and secrets):
 
 ```
-DATABASE_URL        postgresql://postgres.[ref]:PASSWORD@aws-X-eu-west-2.pooler.supabase.com:5432/postgres
-JWT_SECRET          64-char hex string
-FRONTEND_URL        https://venderscope.vercel.app
-ENV                 production
+DATABASE_URL          postgresql://postgres.yourprojectref:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+SUPABASE_CA_CERT_PATH /app/certs/supabase-prod-ca.crt   (required — verified TLS to Supabase)
+JWT_SECRET            64-char hex string
+RECOVERY_CODE_PEPPER  required in production
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
+FRONTEND_URL          https://venderscope.vercel.app
+ENV                   production
 NVD_API_KEY
 COMPANIES_HOUSE_API_KEY
 SHODAN_API_KEY
 TAVILY_API_KEY
-GMAIL_ADDRESS       (optional — local email fallback)
-GMAIL_APP_PASSWORD  (optional)
-EMAIL_ENABLED       1 (set to 0 to disable all outbound email)
-ALERT_THRESHOLD     70
+GMAIL_ADDRESS         (optional — local email fallback)
+GMAIL_APP_PASSWORD    (optional)
+EMAIL_ENABLED         1 (set to 0 to disable all outbound email)
+ALERT_THRESHOLD       70
 ```
 
 **Keep-alive:** Set up UptimeRobot (free) to ping `https://darkitowo-venderscope-api.hf.space/` every 5 minutes using HTTP GET. This prevents HF sleep and keeps APScheduler alive.

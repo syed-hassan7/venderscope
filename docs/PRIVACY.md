@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** 26 March 2026
+**Last updated:** 25 August 2026
 **Effective date:** 23 March 2026
 
 This Privacy Policy explains how VenderScope ("we", "us", "our") collects, uses, stores, and protects your information when you use our vendor risk intelligence platform.
@@ -26,8 +26,15 @@ If you use the Guest Scan feature (accessible without an account), VenderScope p
 ### 2.1 Account Data
 When you create an account, we collect:
 - Email address
-- Password (stored as a bcrypt hash — we cannot recover your plaintext password)
 - Account creation timestamp
+
+**Passkeys:** We store a public key and credential identifier for your passkey. We never store biometrics or device secrets.
+
+**Recovery codes:** We store hashed one-time recovery codes (not plaintext). Codes are shown once at signup.
+
+**Google Sign-In:** New accounts start with Google, then a passkey. We store Google's subject identifier (`sub`) and your verified Google email as the account label. Linking Google later requires confirming with a passkey or password. You can disconnect Google from Sign-in methods unless it is the last strong sign-in method.
+
+**Legacy passwords:** Password sign-in is closed. Older accounts may still store a bcrypt hash so you can confirm identity when adding a passkey, linking Google, or deleting the account.
 
 We do not collect your name, phone number, address, date of birth, or payment information.
 
@@ -102,14 +109,15 @@ We share data only in the following limited circumstances:
 ### 5.1 Third-Party Services We Use
 | Service | Purpose | Data Shared | Location |
 |---------|---------|-------------|----------|
-| Render | API hosting | All platform data (except database) | USA (EU-equivalent safeguards) |
-| Neon | Database hosting (PostgreSQL) | All stored vendor and account data | USA (EU-equivalent safeguards) |
+| Hugging Face | API hosting (Docker Spaces) | All platform data (except database) | USA (EU-equivalent safeguards) |
+| Supabase | Database hosting (PostgreSQL) | All stored vendor and account data | USA (EU-equivalent safeguards) |
 | Vercel | Hosting (frontend) | No personal data | USA (EU-equivalent safeguards) |
 | HaveIBeenPwned | Breach lookups | Vendor domain (not user data) | USA |
 | NIST NVD | CVE lookups | Vendor name (not user data) | USA |
 | Shodan | Infrastructure lookups | Vendor domain (not user data) | USA |
-| Google (CSE) | Compliance web search | Vendor name/domain | USA |
-| Resend | Transactional email | Your email address | USA |
+| Tavily | Compliance web search | Vendor name/domain | USA |
+| Google | Sign-in (OAuth 2.0) | Your Google account identifier and verified email, only if you use Google sign-in | USA |
+| Resend | Transactional email | Your email address — integrated but not currently sending live traffic (no verified sending domain configured yet) | USA |
 
 No third party receives your account credentials, your vendor list structure, or your risk scores.
 
@@ -132,7 +140,7 @@ In the event of a merger, acquisition, or asset sale, your data may be transferr
 | Audit logs | 12 months |
 | Revoked tokens | Until token expiry date |
 
-When an account is deleted, all associated vendor data, risk events, score history, and compliance data is permanently and immediately deleted.
+When an account is deleted, vendor data, risk events, score history, compliance data, passkeys, recovery hashes, and audit rows tied to that user id are deleted immediately. Failed-login audit events that never had a user id may remain until the audit retention window ends.
 
 ---
 
@@ -141,25 +149,27 @@ When an account is deleted, all associated vendor data, risk events, score histo
 You have the following rights. To exercise any of them, email us at syedzrk1000@gmail.com.
 
 ### 7.1 Right of Access (Article 15)
-You have the right to request a copy of all personal data we hold about you. We will respond within **30 days**. You can also export your data directly from the platform (see Settings → Export My Data).
+You have the right to request a copy of all personal data we hold about you. Email us and we will respond within **30 days**. The Risk Register CSV export (Dashboard → Export Register) covers your vendor and risk data today; a dedicated full-account data export is not yet a self-service feature.
 
 ### 7.2 Right to Rectification (Article 16)
 You can correct inaccurate personal data at any time via your account settings.
 
 ### 7.3 Right to Erasure / Right to be Forgotten (Article 17)
-You can delete your account at any time via Settings → Delete Account. This permanently removes:
-- Your email address and password hash
+You can delete your account at any time via Delete Account in the footer. This removes:
+- Your email address, password hash (if any), Google subject, passkeys, and recovery hashes
 - All vendors you added
 - All associated risk events, score history, and compliance data
-- Your alert configuration
+- Audit log rows attributed to your user id
 
-Deletion is permanent and irreversible. All data is erased immediately upon account deletion.
+You can also remove individual passkeys or disconnect Google from **Sign-in methods** in the footer without deleting the account. Recovery codes are not enough to drop the last passkey or unlink Google. Use Delete Account if you want everything gone.
+
+Deletion is permanent. Unattributed failed-login audit events may remain until the audit log retention period ends.
 
 ### 7.4 Right to Restriction of Processing (Article 18)
 You can ask us to pause processing of your data while a dispute is resolved.
 
 ### 7.5 Right to Data Portability (Article 20)
-You can export all your vendor data and risk history in JSON format via Settings → Export My Data.
+Vendor and risk data can be exported today via the Dashboard's Risk Register CSV export. A full-account JSON export is not yet a self-service feature — email us to request a portable copy of your data.
 
 ### 7.6 Right to Object (Article 21)
 You can object to processing based on legitimate interests. We will stop unless we have compelling legitimate grounds.
@@ -173,14 +183,34 @@ If you are in the EU, contact your local Data Protection Authority.
 
 ## 8. Cookies
 
-VenderScope uses minimal cookies:
+VenderScope uses minimal cookies and separates them into strictly necessary cookies and optional cookies.
 
-| Cookie | Purpose | Type | Duration |
-|--------|---------|------|---------|
-| `vs_refresh` | Stores your refresh token for silent re-authentication | httpOnly, Secure, SameSite=None (production) / Lax (local dev) | 7 days |
-| Session storage | Stores your access token in browser memory | Not a cookie — cleared on tab close | 15 minutes |
+### 8.1 Strictly Necessary Cookies
 
-We do not use advertising cookies, tracking cookies, or third-party analytics cookies.
+These cookies are required for core platform security and authentication. They cannot be disabled without breaking sign-in or secure session continuity.
+
+| Cookie / Storage | Purpose | Type | Duration |
+|------------------|---------|------|---------|
+| `vs_refresh` | Stores your refresh token for silent re-authentication and secure session continuity | httpOnly, Secure, SameSite=None (production) / Lax (local dev) | 7 days |
+| In-memory access token | Stores your short-lived access token used for authenticated API calls | Not a cookie — held in browser memory only | Up to 15 minutes |
+
+### 8.2 Optional Cookies
+
+Optional cookies are reserved for future non-essential features. They are not required to use the VenderScope platform today.
+
+- You can **accept** or **decline optional cookies** using the cookie banner or the **Cookie Settings** control in the site footer
+- If you decline optional cookies, VenderScope keeps strictly necessary authentication cookies active but blocks optional cookie/storage use
+- If optional client-side storage has been used for a non-essential feature, it is cleared when you decline optional cookies
+
+### 8.3 What We Do Not Use
+
+We do not use:
+- Advertising cookies
+- Cross-site tracking cookies
+- Third-party analytics cookies
+- Social media tracking pixels
+
+Declining optional cookies does **not** prevent you from logging in, using the dashboard, viewing vendor details, or exporting reports, because those flows rely only on strictly necessary security cookies.
 
 ---
 
@@ -188,7 +218,7 @@ We do not use advertising cookies, tracking cookies, or third-party analytics co
 
 We protect your data through:
 - **Encryption in transit:** All data transmitted over HTTPS (TLS 1.2+)
-- **Encryption at rest:** Database encrypted at rest on Neon (PostgreSQL)
+- **Encryption at rest:** Database encrypted at rest on Supabase (PostgreSQL)
 - **Password security:** bcrypt hashing with minimum 12 rounds — we cannot recover your password
 - **Access control:** Authentication required for all data access; data scoped to your account only
 - **Token security:** Authentication tokens stored in httpOnly cookies inaccessible to JavaScript

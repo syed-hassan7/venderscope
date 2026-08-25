@@ -4,10 +4,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| v4.0 (current) | ✅ |
-| v3.5 | ✅ Security patches only |
-| v3.1 | ✅ Security patches only |
-| v3.0 | ❌ Upgrade to v4.0 |
+| v5.0 (current) | ✅ |
+| v4.x | ✅ Security patches only |
+| v3.x | ❌ Upgrade to v5.0 |
 | v2.x | ❌ No longer maintained |
 | v1.x | ❌ No longer maintained |
 
@@ -54,16 +53,24 @@ We ask that you:
 - Passwords hashed with bcrypt (minimum 12 rounds) where still used
 - JWT access tokens are short-lived (15 minutes) and stored in memory only — never in localStorage
 - Refresh tokens are 7-day single-use tokens stored in httpOnly, Secure, SameSite=None cookies — inaccessible to JavaScript
+- The refresh cookie is treated as a **strictly necessary security cookie**; optional-cookie consent does not disable authentication
 - Used refresh tokens are immediately invalidated (JTI blacklist) — each token can only be used once
 - Reuse of a revoked refresh JTI increments `session_version` and kills the rest of that user's session family
 - Logout increments `session_version` so in-memory access JWTs fail immediately
 - Linking Google is POST `/api/auth/google/link/start` with a live access token plus passkey or password step-up
-- Adding a passkey while logged in requires the same step-up (except Google-only accounts adding their first passkey)
+- Adding a passkey while logged in requires step-up — an existing passkey or password, or, for Google-only accounts with no other factor yet, a fresh Google re-authentication that must resolve to the same account already on file
+- Disconnecting Google requires the same step-up as linking it
 - Step-up verification before permanent account deletion — password, recovery code, or passkey depending on registered factors
 - CSRF origin validation on cookie-consuming endpoints; refresh and logout reject requests with no Origin/Referer
 - Brute force protection on all authentication endpoints
 - Account enumeration prevention — login errors never reveal whether an email exists
-- Residual risk (honest): XSS can still steal the in-memory 15-minute access JWT. Google-only accounts adding their first passkey skip step-up. Hugging Face `X-Forwarded-For` hop order is not proven against live proxy headers.
+- Residual risk (honest): XSS can still steal the in-memory 15-minute access JWT. Hugging Face `X-Forwarded-For` hop order is not proven against live proxy headers.
+
+### Cookie Consent
+- VenderScope presents a cookie consent banner and a footer-level **Cookie Settings** control
+- Users may accept or decline **optional** cookies without degrading core platform use
+- Declining optional cookies clears optional client-side storage namespaces while keeping strictly necessary auth cookies active
+- The platform currently does not use advertising, tracking, or third-party analytics cookies
 
 ### Authorisation
 - All authenticated endpoints require a valid JWT access token
@@ -89,7 +96,7 @@ Guest mode was introduced in v3.5 with security as the primary design constraint
 - CORS restricted to known frontend origins only
 
 ### Data at Rest
-- Database encrypted at rest (PostgreSQL on Neon)
+- Database encrypted at rest (PostgreSQL on Supabase)
 - No sensitive data stored in application logs
 - Secrets managed via environment variables — never committed to source code
 - Tavily search quota usage is persisted in the database and survives restarts/redeploys
@@ -110,7 +117,7 @@ DNS resolution is performed and the resolved IP is checked, not just the hostnam
 
 ### Search Quota Enforcement
 - Tavily usage is capped to the configured free-tier budget
-- Quota state is stored in the database, not local disk, so it survives Render restarts
+- Quota state is stored in the database, not local disk, so it survives container restarts
 - Quota consumption is serialized against the monthly row to reduce concurrent oversubscription risk
 - Search units are refunded when a Tavily request fails before a successful 200 response
 - When search quota is exhausted, scans fall back to vendor-site discovery rather than failing outright
@@ -150,6 +157,28 @@ This provides browser-level XSS mitigation in addition to React's built-in outpu
 ## Security Audits & Disclosures
 
 VenderScope undergoes a full white-box security audit before every significant release. All findings are disclosed below.
+
+---
+
+### v5.0 Audit — 25 August 2026 (Auth Re-verification Hardening)
+**Scope:** Google/passkey account-factor management endpoints (add first passkey, disconnect Google) and WebAuthn sign-count verification.
+**Test result:** 179/179 backend tests passing (12 new/updated)
+
+| ID | Severity | Finding | Resolution |
+|----|----------|---------|------------|
+| V5-01 | HIGH | **Adding a first passkey to a Google-only account, and disconnecting Google, did not require re-proving control of the account.** A compromised short-lived access token could change an account's sign-in factors without any additional verification. | Disconnecting Google now requires the same step-up (password/passkey) as linking it. Adding a first passkey to a Google-only account (which has no existing factor to step up with) now requires a fresh Google re-authentication that must resolve to the same account already on file. |
+| V5-02 | LOW | **WebAuthn sign-count handling duplicated the verification library's own clone-detection check, without the library's correctness exemption** — authenticators that don't track a use counter could be incorrectly rejected on login. | Removed the duplicate check; the library's own verification (which already handles this correctly) is now authoritative. A genuine clone/replay now returns a clean 401 instead of an unhandled error. |
+
+---
+
+### v4.5 Infrastructure Migration Audit — 22 May 2026 (Render → HF Spaces, Neon → Supabase)
+**Scope:** Backend host migration from Render to Hugging Face Spaces Docker; database migration from Neon PostgreSQL to Supabase PostgreSQL.
+
+| ID | Severity | Finding | Resolution |
+|----|----------|---------|------------|
+| INF-01 | LOW | **SSL certificate verification disabled on DB connection** — Supabase's Session Pooler uses a self-signed certificate not present in any standard CA bundle (system store or Mozilla/certifi). `ssl.CERT_NONE` is required to connect. The connection remains TLS-encrypted; only certificate authenticity is unverified. | Accepted. Root cause is Supabase's pooler infrastructure, not application code. Proper fix would require pinning Supabase's specific project CA cert, which rotates and is project-specific. Encrypted transport is maintained. |
+| INF-02 | INFO | **`is_production()` generalised** — previously keyed on `RENDER` env var; Koyeb/HF would not set this, silently putting the app in dev mode (Lax cookies, no HSTS). | Changed to `os.getenv("ENV", "").lower() == "production"`. `ENV=production` set as HF Space secret. |
+| INF-03 | INFO | **XFF[-1] proxy behaviour unverified on HF Spaces** — HF Spaces uses nginx. `--forwarded-allow-ips='*'` is set. Rate limiting and audit log IP accuracy depend on HF's proxy appending (not prepending) the real client IP. | Accepted. Behavioural equivalent to Render's proxy. Monitor in production logs if rate-limit bypasses are observed. |
 
 ---
 
@@ -198,7 +227,7 @@ VenderScope undergoes a full white-box security audit before every significant r
 |----|----------|---------|------------|
 | HIGH-01 | HIGH | Per-client rate limiting broken behind Render proxy — all users shared one IP bucket | Fixed via `--proxy-headers` in `render.yaml` + `_real_ip()` key function |
 | MED-01 | MEDIUM | Account deletion had no password reconfirmation — brief access token compromise could silently delete account | Password reconfirmation required before deletion |
-| MED-02 | MEDIUM | Audit log IP sourced from `XFF[0]` — spoofable by clients | Changed to `XFF[-1]` (Render-appended) |
+| MED-02 | MEDIUM | Audit log IP sourced from `XFF[0]` — spoofable by clients | Changed to `XFF[-1]` (proxy-appended) |
 | MED-03 | MEDIUM | No CSRF protection on `logout`, `refresh`, `delete_account` cookie endpoints | `_verify_origin()` added — compares scheme+netloc via `urlparse` (a previous `startswith` bypass was also closed) |
 | SSRF | MEDIUM | `_is_safe_domain()` had multiple bypasses: URL-encoding, decimal IP, IPv6-mapped IPv4, cloud metadata endpoints, 3-hop redirect chain | Full hardening applied |
 | HIBP | LOW | Substring domain match caused false positives; no cache on the 1MB breach list | Exact match + www-normalisation; 1hr in-process cache |
@@ -216,14 +245,14 @@ VenderScope undergoes a full white-box security audit before every significant r
 
 Findings covered authentication token handling, IDOR protection, bcrypt DoS prevention (CRIT-03), user enumeration timing attacks (CRIT-01), stack trace exposure, security header gaps, JWT algorithm confusion (CVE-2015-9235), and SSRF in the compliance discovery engine.
 
-Full technical detail in `tasks/security-architecture.md`.
+Full technical detail in this document's audit history above.
 
 ---
 
 ## Known Limitations
 
 - **Email alerts:** Currently use SMTP in development. Production deployments should configure Resend (HTTP API) via the `RESEND_API_KEY` environment variable once a verified sending domain is available.
-- **Rate limiting on free-tier hosting:** Rate limits and audit IPs use the same hop selection as `_real_ip()`. Default leftmost on Hugging Face Spaces (`SPACE_ID`/`SPACE_HOST`), rightmost otherwise; override with `RATE_LIMIT_XFF_CLIENT=first|last`. `--forwarded-allow-ips="*"` is required on uvicorn. Leftmost remains spoofable if HF forwards a client-supplied XFF prefix.
+- **Rate limiting on free-tier hosting:** Rate limits and audit IPs use the same hop selection as `_real_ip()`. Default leftmost on Hugging Face Spaces, rightmost otherwise; override with `RATE_LIMIT_XFF_CLIENT`. `--forwarded-allow-ips="*"` is required on uvicorn. Leftmost remains spoofable if HF forwards a client-supplied XFF prefix.
 - **Global search budget:** Tavily quota is enforced globally for the app today, not per-user. Per-user budgets are planned as a future layer on top of the new DB-backed global quota.
 - **Self-hosted deployments:** Security of self-hosted instances is the responsibility of the operator.
 

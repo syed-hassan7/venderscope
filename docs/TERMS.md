@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Last updated:** 23 March 2026
+**Last updated:** 25 August 2026
 **Effective date:** 23 March 2026
 
 Please read these Terms of Service ("Terms") carefully before using VenderScope.
@@ -39,7 +39,7 @@ You must be at least 18 years old and have the authority to enter into these Ter
 
 ### 4.1 Account Security
 You are responsible for:
-- Keeping your password secure and confidential
+- Protecting your passkeys, Google account, and recovery codes
 - All activity that occurs under your account
 - Notifying us immediately at syedzrk1000@gmail.com if you suspect unauthorised access
 
@@ -108,14 +108,14 @@ You retain ownership of the vendor data you add. By using the platform, you gran
 
 ## 9. Third-Party Services
 
-VenderScope integrates with third-party services (HIBP, NIST, Shodan, Google, Render, Vercel). Your use of these services through VenderScope is also subject to their respective terms. We are not responsible for the availability, accuracy, or practices of third-party services.
+VenderScope integrates with third-party services (HIBP, NIST, Shodan, Google, Hugging Face, Supabase, Vercel). Your use of these services through VenderScope is also subject to their respective terms. We are not responsible for the availability, accuracy, or practices of third-party services.
 
 ---
 
 ## 10. Availability & Modifications
 
 ### 10.1 Service Availability
-VenderScope is provided on a best-effort basis. We do not guarantee 100% uptime, particularly on the free tier (Render free tier has cold-start delays of approximately 50 seconds after inactivity).
+VenderScope is provided on a best-effort basis. We do not guarantee 100% uptime. The backend runs on Hugging Face Spaces free tier, which may sleep after extended inactivity. UptimeRobot keep-alive pings minimise this in practice.
 
 ### 10.2 Modifications
 We may modify, suspend, or discontinue any part of VenderScope at any time. We will provide reasonable notice for material changes where possible.
@@ -153,7 +153,7 @@ You agree to indemnify and hold harmless VenderScope from any claims, damages, o
 ## 14. Termination
 
 ### 14.1 By You
-You may close your account at any time via Settings → Delete Account. Upon closure, your data is permanently and immediately deleted per our Privacy Policy.
+You may close your account at any time via Delete Account in the footer. Upon closure, your data is permanently and immediately deleted per our Privacy Policy.
 
 ### 14.2 By Us
 We may suspend or terminate your account immediately if you violate these Terms, engage in abusive behaviour, or for any other reason with reasonable notice.
@@ -178,4 +178,4 @@ We will notify registered users by email at least **14 days** before material ch
 ## 17. Contact
 
 **Email:** syedzrk1000@gmail.com
-**GitHub:** https://github.com/darkyzowo/venderscope
+**GitHub:** https://github.com/syed-hassan7/venderscope

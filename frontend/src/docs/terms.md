@@ -153,7 +153,7 @@ You agree to indemnify and hold harmless VenderScope from any claims, damages, o
 ## 14. Termination
 
 ### 14.1 By You
-You may close your account at any time via Settings → Delete Account. Upon closure, your data is permanently and immediately deleted per our Privacy Policy.
+You may close your account at any time via Delete Account in the footer. Upon closure, your data is permanently and immediately deleted per our Privacy Policy.
 
 ### 14.2 By Us
 We may suspend or terminate your account immediately if you violate these Terms, engage in abusive behaviour, or for any other reason with reasonable notice.
@@ -178,4 +178,4 @@ We will notify registered users by email at least **14 days** before material ch
 ## 17. Contact
 
 **Email:** syedzrk1000@gmail.com
-**GitHub:** https://github.com/darkyzowo/venderscope
+**GitHub:** https://github.com/syed-hassan7/venderscope

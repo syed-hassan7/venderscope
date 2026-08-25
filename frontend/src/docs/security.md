@@ -4,10 +4,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| v4.0 (current) | ✅ |
-| v3.5 | ✅ Security patches only |
-| v3.1 | ✅ Security patches only |
-| v3.0 | ❌ Upgrade to v4.0 |
+| v5.0 (current) | ✅ |
+| v4.x | ✅ Security patches only |
+| v3.x | ❌ Upgrade to v5.0 |
 | v2.x | ❌ No longer maintained |
 | v1.x | ❌ No longer maintained |
 
@@ -59,12 +58,13 @@ We ask that you:
 - Reuse of a revoked refresh JTI increments `session_version` and kills the rest of that user's session family
 - Logout increments `session_version` so in-memory access JWTs fail immediately
 - Linking Google is POST `/api/auth/google/link/start` with a live access token plus passkey or password step-up
-- Adding a passkey while logged in requires the same step-up (except Google-only accounts adding their first passkey)
+- Adding a passkey while logged in requires step-up — an existing passkey or password, or, for Google-only accounts with no other factor yet, a fresh Google re-authentication that must resolve to the same account already on file
+- Disconnecting Google requires the same step-up as linking it
 - Step-up verification before permanent account deletion — password, recovery code, or passkey depending on registered factors
 - CSRF origin validation on cookie-consuming endpoints; refresh and logout reject requests with no Origin/Referer
 - Brute force protection on all authentication endpoints
 - Account enumeration prevention — login errors never reveal whether an email exists
-- Residual risk (honest): XSS can still steal the in-memory 15-minute access JWT. Google-only accounts adding their first passkey skip step-up. Hugging Face `X-Forwarded-For` hop order is not proven against live proxy headers.
+- Residual risk (honest): XSS can still steal the in-memory 15-minute access JWT. Hugging Face `X-Forwarded-For` hop order is not proven against live proxy headers.
 
 ### Cookie Consent
 - VenderScope presents a cookie consent banner and a footer-level **Cookie Settings** control
@@ -160,6 +160,17 @@ VenderScope undergoes a full white-box security audit before every significant r
 
 ---
 
+### v5.0 Audit — 25 August 2026 (Auth Re-verification Hardening)
+**Scope:** Google/passkey account-factor management endpoints (add first passkey, disconnect Google) and WebAuthn sign-count verification.
+**Test result:** 179/179 backend tests passing (12 new/updated)
+
+| ID | Severity | Finding | Resolution |
+|----|----------|---------|------------|
+| V5-01 | HIGH | **Adding a first passkey to a Google-only account, and disconnecting Google, did not require re-proving control of the account.** A compromised short-lived access token could change an account's sign-in factors without any additional verification. | Disconnecting Google now requires the same step-up (password/passkey) as linking it. Adding a first passkey to a Google-only account (which has no existing factor to step up with) now requires a fresh Google re-authentication that must resolve to the same account already on file. |
+| V5-02 | LOW | **WebAuthn sign-count handling duplicated the verification library's own clone-detection check, without the library's correctness exemption** — authenticators that don't track a use counter could be incorrectly rejected on login. | Removed the duplicate check; the library's own verification (which already handles this correctly) is now authoritative. A genuine clone/replay now returns a clean 401 instead of an unhandled error. |
+
+---
+
 ### v4.5 Infrastructure Migration Audit — 22 May 2026 (Render → HF Spaces, Neon → Supabase)
 **Scope:** Backend host migration from Render to Hugging Face Spaces Docker; database migration from Neon PostgreSQL to Supabase PostgreSQL.
 
@@ -234,7 +245,7 @@ VenderScope undergoes a full white-box security audit before every significant r
 
 Findings covered authentication token handling, IDOR protection, bcrypt DoS prevention (CRIT-03), user enumeration timing attacks (CRIT-01), stack trace exposure, security header gaps, JWT algorithm confusion (CVE-2015-9235), and SSRF in the compliance discovery engine.
 
-Full technical detail in `tasks/security-architecture.md`.
+Full technical detail in this document's audit history above.
 
 ---
 
