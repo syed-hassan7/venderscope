@@ -15,10 +15,11 @@ VenderScope is a continuous, passive vendor risk intelligence platform built for
 
 ## Latest Release — v5.0: Google-Gated Passkey Authentication
 
-Auth was rebuilt around Google-then-passkey enrollment instead of passwords — passkeys prove control of an authenticator on this origin, not mailbox control, so signup now gates on a verified Google identity first. Password sign-in is closed; recovery codes and session-family invalidation (a stolen refresh token can't outlive a rotation) round out the model. A follow-up hardening pass closed a re-verification gap where changing an account's Google/passkey sign-in factors didn't always require re-proving control of the account, and corrected a WebAuthn sign-count check to match the verification library's own (more permissive and correct) logic.
+Auth was rebuilt around Google-then-passkey enrollment instead of passwords — passkeys prove control of an authenticator on this origin, not mailbox control, so signup now gates on a verified Google identity first. Password sign-in is closed; recovery codes and session-family invalidation (a stolen refresh token can't outlive a rotation) round out the model. A follow-up hardening pass closed a re-verification gap where changing an account's Google/passkey sign-in factors didn't always require re-proving control of the account, and corrected a WebAuthn sign-count check to match the verification library's own (more permissive and correct) logic. A second follow-up pass hardened the frontend: scan/delete/notes/review actions that used to fail silently now surface a visible error, an inconsistent risk-band threshold across 6 components was unified onto one source, vendor deletion moved from a bare browser confirm to an itemized-consequence modal, the vendor detail page was restructured into tabs with dropdown selectors in place of two oversized button grids, two hover-only tooltips became keyboard-accessible (WCAG 2.1 AA), and `prefers-reduced-motion` is now respected app-wide.
 
-- `python -m pytest -q` → `179 passed`
-- `npm run build` → passed
+- `python -m pytest -q` → `179 passed` (backend untouched by the frontend hardening pass)
+- `npm run build` (frontend) → passed
+- `npm run lint` (frontend) → no new errors (4 pre-existing, unrelated)
 
 Full version history, including the exact fixes in this pass: [`CHANGELOG.md`](CHANGELOG.md)
 

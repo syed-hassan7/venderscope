@@ -1,28 +1,30 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import VendorAvatar from './VendorAvatar'
+import { riskLevel } from './RiskBadge'
 import { formatApiDateTime, parseApiDate } from '../utils/datetime'
 
-const riskConfig = (s) => {
-  if (s >= 70) return {
+const RISK_CONFIG = {
+  high: {
     color: 'var(--risk-high)',
     border: 'rgba(240,68,56,0.25)',
     hoverBorder: 'rgba(240,68,56,0.45)',
     hoverGlow: 'rgba(240,68,56,0.08)',
-  }
-  if (s >= 35) return {
+  },
+  medium: {
     color: 'var(--risk-medium)',
     border: 'rgba(245,158,11,0.2)',
     hoverBorder: 'rgba(245,158,11,0.4)',
     hoverGlow: 'rgba(245,158,11,0.07)',
-  }
-  return {
+  },
+  low: {
     color: 'var(--risk-low)',
     border: 'rgba(16,185,129,0.18)',
     hoverBorder: 'rgba(16,185,129,0.38)',
     hoverGlow: 'rgba(16,185,129,0.06)',
-  }
+  },
 }
+const riskConfig = (s) => RISK_CONFIG[riskLevel(s)]
 
 const SENSITIVITY_BADGES = {
   none:      { label: 'No Access',  color: 'var(--lo)',          bg: 'rgba(138,140,152,0.1)',   border: 'rgba(138,140,152,0.2)' },
@@ -30,7 +32,7 @@ const SENSITIVITY_BADGES = {
   financial: { label: 'Financial',  color: 'var(--risk-high)',   bg: 'var(--risk-high-tint)',   border: 'rgba(240,68,56,0.25)'  },
   auth:      { label: 'Auth/SSO',   color: 'var(--risk-high)',   bg: 'var(--risk-high-tint)',   border: 'rgba(240,68,56,0.25)'  },
   health:    { label: 'Health',     color: '#ec4899',            bg: 'rgba(236,72,153,0.1)',    border: 'rgba(236,72,153,0.25)' },
-  critical:  { label: 'Critical',   color: 'var(--risk-crit)',   bg: 'var(--risk-high-tint)',   border: 'rgba(240,68,56,0.3)'   },
+  critical:  { label: 'Critical',   color: 'var(--risk-crit)',   bg: 'rgba(244,63,94,0.12)',    border: 'rgba(244,63,94,0.3)'   },
 }
 
 export default function VendorCard({ vendor, onDelete, onScan, scanning }) {

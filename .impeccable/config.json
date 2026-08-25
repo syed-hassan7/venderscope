@@ -1,0 +1,29 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-08-25T20:14:37.420Z",
+        "reason": "Self-hosted via real @font-face (not a lazy Google Fonts default), used consistently app-wide since v3 — reviewed 2026-08-25, deliberate choice, not swapping mid-hardening-pass"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "auth-grid",
+        "createdAt": "2026-08-25T20:14:45.684Z",
+        "reason": "Auth dot-grid decoration kept deliberately per 2026-08-25 tone decision — auth screens stay expressive/consumer-SaaS on purpose, dashboard stays sober. Not the linear-gradient hairline pattern the rule describes anyway (radial-gradient dot tile)."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "frontend/src/components/EventFeed.jsx"
+        ],
+        "createdAt": "2026-08-25T20:14:56.204Z",
+        "reason": "3px severity-colored left border carries real semantic meaning (event severity level) on the risk-event list, not pure decoration — reviewed 2026-08-25"
+      }
+    ]
+  }
+}

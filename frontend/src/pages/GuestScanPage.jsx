@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { guestScan, downloadGuestReport, ping } from '../api/client'
 import VSLogo from '../components/VSLogo'
+import { riskLevel } from '../components/RiskBadge'
 
-const riskColor = (s) => s >= 70 ? 'var(--risk-high)' : s >= 35 ? 'var(--risk-medium)' : 'var(--risk-low)'
-const riskLabel = (s) => s >= 70 ? 'HIGH RISK' : s >= 35 ? 'MEDIUM RISK' : 'LOW RISK'
+const RISK_COLOR = { high: 'var(--risk-high)', medium: 'var(--risk-medium)', low: 'var(--risk-low)' }
+const RISK_LABEL = { high: 'HIGH RISK', medium: 'MEDIUM RISK', low: 'LOW RISK' }
+const riskColor = (s) => RISK_COLOR[riskLevel(s)]
+const riskLabel = (s) => RISK_LABEL[riskLevel(s)]
 const sevColor  = (s) => ({ CRITICAL: 'var(--risk-crit)', HIGH: 'var(--risk-high)', MEDIUM: 'var(--risk-medium)', LOW: 'var(--risk-low)' }[s] || 'var(--lo)')
 
 export default function GuestScanPage() {

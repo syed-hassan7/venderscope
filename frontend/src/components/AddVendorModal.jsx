@@ -61,7 +61,7 @@ export default function AddVendorModal({ onAdd, onClose }) {
           boxShadow: '0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(139,92,246,0.1)',
           transform: visible ? 'scale(1) translateY(0)' : 'scale(0.96) translateY(8px)',
           opacity: visible ? 1 : 0,
-          transition: 'transform 200ms cubic-bezier(0.34,1.2,0.64,1), opacity 200ms ease',
+          transition: 'transform 200ms cubic-bezier(0.16,1,0.3,1), opacity 200ms ease',
         }}
         onKeyDown={handleKey}
       >

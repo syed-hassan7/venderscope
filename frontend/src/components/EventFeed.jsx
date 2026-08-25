@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { formatApiDate, parseApiDate } from '../utils/datetime'
 
 const SEV = {
-  CRITICAL: { color: 'var(--risk-crit)',   bg: 'rgba(240,68,56,0.06)',  border: 'rgba(240,68,56,0.14)'  },
+  CRITICAL: { color: 'var(--risk-crit)',   bg: 'rgba(244,63,94,0.06)',  border: 'rgba(244,63,94,0.14)'  },
   HIGH:     { color: 'var(--risk-high)',   bg: 'rgba(240,68,56,0.05)',  border: 'rgba(240,68,56,0.12)'  },
   MEDIUM:   { color: 'var(--risk-medium)', bg: 'rgba(245,158,11,0.05)', border: 'rgba(245,158,11,0.1)'  },
   LOW:      { color: 'var(--risk-low)',    bg: 'rgba(16,185,129,0.04)', border: 'rgba(16,185,129,0.09)' },
@@ -60,6 +60,8 @@ const AcceptedBadge = ({ acceptance }) => {
    */
   const tooltip = createPortal(
     <div
+      id={`accepted-tooltip-${acceptance.id}`}
+      role="tooltip"
       style={{
         position:   'fixed',
         top:        pos.top,
@@ -91,9 +93,11 @@ const AcceptedBadge = ({ acceptance }) => {
 
   return (
     <span className="inline-block shrink-0">
-      <span
+      <button
+        type="button"
         ref={badgeRef}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold tracking-wider whitespace-nowrap cursor-help"
+        aria-describedby={`accepted-tooltip-${acceptance.id}`}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold tracking-wider whitespace-nowrap cursor-help bg-transparent"
         style={{
           background: 'rgba(251,191,36,0.08)',
           color: '#fbbf24',
@@ -101,10 +105,12 @@ const AcceptedBadge = ({ acceptance }) => {
         }}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={() => setHovered(false)}
+        onFocus={handleMouseEnter}
+        onBlur={() => setHovered(false)}
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#fbbf24' }} />
         ACCEPTED
-      </span>
+      </button>
       {tooltip}
     </span>
   )
@@ -116,10 +122,11 @@ const DEFAULT_EXPIRY = () => {
   return d.toISOString().split('T')[0]
 }
 
-export default function EventFeed({ events, acceptances = [], onAccept, onRevoke }) {
+export default function EventFeed({ events, acceptances = [], onAccept, onRevoke, revokingIds }) {
   const [expandedEvent, setExpandedEvent] = useState(null)
   const [formState, setFormState] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [acceptError, setAcceptError] = useState('')
 
   if (!events.length)
     return (
@@ -188,6 +195,7 @@ export default function EventFeed({ events, acceptances = [], onAccept, onRevoke
     const form = getForm(evt.id)
     if (!form.justification.trim() || !form.reviewer.trim()) return
     setSubmitting(true)
+    setAcceptError('')
     try {
       await onAccept(evt.id, {
         event_id:      evt.id,
@@ -199,6 +207,8 @@ export default function EventFeed({ events, acceptances = [], onAccept, onRevoke
       })
       setExpandedEvent(null)
       setFormState((s) => { const n = { ...s }; delete n[evt.id]; return n })
+    } catch (e) {
+      setAcceptError(e.response?.data?.detail || 'Failed to save risk acceptance. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -259,13 +269,14 @@ export default function EventFeed({ events, acceptances = [], onAccept, onRevoke
                       {onRevoke && (
                         <button
                           onClick={() => onRevoke(acceptance.id)}
-                          className="text-[9px] px-1.5 py-0.5 rounded transition-colors duration-150"
+                          disabled={revokingIds?.has(acceptance.id)}
+                          className="text-[9px] px-1.5 py-0.5 rounded transition-colors duration-150 disabled:opacity-40"
                           style={{ color: 'var(--lo)', background: 'transparent' }}
                           onMouseEnter={(e) => e.currentTarget.style.color = 'var(--risk-high)'}
                           onMouseLeave={(e) => e.currentTarget.style.color = 'var(--lo)'}
                           title="Revoke acceptance"
                         >
-                          ✕
+                          {revokingIds?.has(acceptance.id) ? '…' : '✕'}
                         </button>
                       )}
                     </>
@@ -274,7 +285,7 @@ export default function EventFeed({ events, acceptances = [], onAccept, onRevoke
                       <SeverityBadge severity={evt.severity} />
                       {onAccept && (
                         <button
-                          onClick={() => setExpandedEvent(isExpanded ? null : evt.id)}
+                          onClick={() => { setAcceptError(''); setExpandedEvent(isExpanded ? null : evt.id) }}
                           className="text-[9px] px-2 py-0.5 rounded transition-all duration-150 shrink-0"
                           style={{
                             background: isExpanded ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.04)',
@@ -384,6 +395,10 @@ export default function EventFeed({ events, acceptances = [], onAccept, onRevoke
                   </div>
                 </div>
 
+                {acceptError && (
+                  <p className="text-xs mb-2" style={{ color: 'var(--risk-high)' }}>{acceptError}</p>
+                )}
+
                 <div className="flex flex-col sm:flex-row gap-2">
                   <button
                     onClick={() => handleAccept(evt)}
@@ -396,7 +411,7 @@ export default function EventFeed({ events, acceptances = [], onAccept, onRevoke
                     {submitting ? 'Saving…' : 'Accept Risk'}
                   </button>
                   <button
-                    onClick={() => setExpandedEvent(null)}
+                    onClick={() => { setAcceptError(''); setExpandedEvent(null) }}
                     className="px-3 py-2 rounded-lg text-xs transition-all duration-150"
                     style={{ color: 'var(--lo)', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
                     onMouseEnter={(e) => e.currentTarget.style.color = 'var(--mid)'}

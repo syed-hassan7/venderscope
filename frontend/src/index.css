@@ -41,7 +41,7 @@
   --risk-medium-tint: rgba(245,158,11,0.12);
   --risk-low:         #10B981;
   --risk-low-tint:    rgba(16,185,129,0.12);
-  --risk-crit:        #F04438;
+  --risk-crit:        #F43F5E;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -396,4 +396,25 @@ html {
     padding-top: 24px;
     padding-bottom: 24px;
   }
+}
+
+/* ── Reduced motion — overrides CSS animations/transitions AND inline
+   style={{ animation/transition }} (this codebase leans heavily on inline
+   motion). An !important external rule beats a non-!important inline
+   declaration regardless of selector specificity, so this one block
+   neutralizes every animated surface — auth orbs, pulse rings, trace-draw,
+   page-glow drift, card fade-ups, score gauge fill, modal transforms —
+   without hunting down each animation individually. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Exempt in-progress indicators — a frozen spinner during a multi-minute
+     scan reads as a hung app, not as "motion respectfully reduced." */
+  .animate-spin { animation-duration: 1s !important; animation-iteration-count: infinite !important; }
+  .skeleton     { animation-duration: 1.6s !important; animation-iteration-count: infinite !important; }
 }

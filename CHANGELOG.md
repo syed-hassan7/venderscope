@@ -17,11 +17,22 @@ Passkeys prove control of an authenticator on this origin, not mailbox control �
 - **Re-verification hardening (this pass)** — adding a *first* passkey to a Google-only account, and disconnecting Google from any account, now also require step-up: Google-only accounts (which have no existing passkey or password to step up with) go through a fresh Google re-authentication that must resolve to the same account already on file; disconnecting Google now requires the same step-up as linking it. Closes a gap where a compromised short-lived session token could change an account's sign-in factors without proving current control. See `docs/SECURITY.md`'s v5.0 audit entry for the full disclosure.
 - **WebAuthn sign-count correctness fix** — the verification library's own clone-detection logic already correctly exempts authenticators that don't track a use counter (common on synced/platform passkeys); an app-side duplicate check lacked that exemption and could have rejected legitimate logins from those authenticators. Removed the duplicate; a genuine clone/replay now returns a clean 401 instead of an unhandled error.
 
+**Follow-up fix, same release — frontend UX/accessibility hardening:** an `impeccable` design critique (dual-assessment: LLM design review + deterministic detector scan) found the app's two most consequential user actions — a scan failing, a vendor being deleted — got the least error handling and confirmation friction in the product, while the auth screens seen once got the most.
+
+- **Silent failures fixed** — `Dashboard.jsx`/`VendorDetail.jsx` scan, delete, note, review-schedule, and risk-acceptance actions used to fail with only a `console.error` (or no error handling at all); a new `Toast` component now surfaces every one visibly. For a risk-monitoring tool, a scan that fails without telling anyone manufactures false assurance.
+- **Risk-band threshold bug** — the "medium risk" cutoff was `35` in `VendorCard.jsx`/`GuestScanPage.jsx`/`ScoreGauge.jsx` but `40` in `Dashboard.jsx`/`VendorDetail.jsx`/`ScoreChart.jsx`; the same score could render a different risk level on the same screen. Unified onto `RiskBadge.jsx`'s single-source `riskLevel()`. Also fixed `--risk-crit` being the literal same color as `--risk-high` (visually indistinguishable "Critical" vs "High"); the new value was contrast-checked against the WCAG 2.1 AA target (5.35:1).
+- **Vendor deletion hardened** — replaced a bare `confirm('Remove this vendor?')` with a `VendorDeleteModal` itemizing exactly what's lost (scan history, risk events and their audit trail, analyst notes, compliance data), matching the confirmation weight already given to account deletion.
+- **VendorDetail restructured** — split into Overview/Compliance/Events/Notes tabs, and converted two oversized button-grid selectors (Data Sensitivity: 7 options, Review Schedule: 6 options) to native `<select>` dropdowns — both a cognitive-load fix and a free accessibility win (native selects are keyboard/screen-reader accessible without hand-rolled ARIA).
+- **Keyboard accessibility (WCAG 2.1 AA)** — the scoring-model explainer and the accepted-risk justification tooltip were hover-only with no keyboard equivalent; both now respond to focus, verified by rendering the page and focusing the trigger element (not just reading the code).
+- **`prefers-reduced-motion` support** — added app-wide, with in-progress spinners/skeletons explicitly exempted so a multi-minute scan doesn't visually read as a hung app.
+- **Detector findings** — fixed 2 overshoot easing curves and a layout-thrashing width transition; documented and suppressed 3 deliberate choices (self-hosted Geist font, decorative auth dot-grid, semantic severity border) with reasons recorded in `.impeccable/config.json`.
+
 Verification after this pass:
 
-- `python -m pytest -q` → `179 passed`
-- `npm run build` → passed
-- `npm run lint` → no new errors (4 pre-existing, unrelated files)
+- `python -m pytest -q` → `179 passed` (backend untouched by this pass, unaffected)
+- `npm run build` (frontend) → passed
+- `npm run lint` (frontend) → no new errors (4 pre-existing, unrelated files)
+- Playwright screenshots across desktop/mobile viewports, both real dev-server pages (Login/Register/GuestScan) and API-route-stubbed Dashboard/VendorDetail (auth-gated, no backend needed) — including the delete modal, both tooltip-focus states, and `prefers-reduced-motion` — confirmed no visual regressions before commit.
 
 ---
 

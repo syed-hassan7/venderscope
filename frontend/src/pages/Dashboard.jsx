@@ -4,7 +4,9 @@ import { Search, X } from 'lucide-react'
 import { getVendors, addVendor, deleteVendor, scanVendor, scanAll, getDashboardSummary } from '../api/client'
 import VendorCard from '../components/VendorCard'
 import AddVendorModal from '../components/AddVendorModal'
+import VendorDeleteModal from '../components/VendorDeleteModal'
 import QuotaBanner from '../components/QuotaBanner'
+import Toast from '../components/Toast'
 import { useAuth } from '../auth/AuthContext'
 import PageBackground from '../components/PageBackground'
 import { parseApiDate } from '../utils/datetime'
@@ -65,6 +67,8 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState('risk')
   const [summary, setSummary] = useState(null)
   const [searchValue, setSearchValue] = useState(searchParams.get('q') || '')
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [toastMessage, setToastMessage] = useState('')
 
   const handleSearch = (val) => {
     setSearchValue(val)
@@ -95,26 +99,45 @@ export default function Dashboard() {
 
   const handleAdd = async (data) => { await addVendor(data); await refreshDashboard() }
 
-  const handleDelete = async (id) => {
-    if (!confirm('Remove this vendor?')) return
-    await deleteVendor(id)
-    await refreshDashboard()
+  const handleDelete = (id) => {
+    const vendor = vendors.find((v) => v.id === id)
+    if (vendor) setDeleteTarget(vendor)
+  }
+
+  const confirmDelete = async () => {
+    await deleteVendor(deleteTarget.id)
+    setDeleteTarget(null)
+    refreshDashboard().catch(() => {
+      setToastMessage('Vendor removed, but the dashboard failed to refresh — reload to see the latest list.')
+    })
   }
 
   const handleScan = async (id) => {
     setScanning((s) => ({ ...s, [id]: true }))
-    try { await scanVendor(id); await refreshDashboard() }
-    catch (e) { console.error('Scan failed:', e) }
-    finally { setScanning((s) => ({ ...s, [id]: false })) }
+    try {
+      await scanVendor(id)
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || "Scan failed — this vendor's risk data may be stale.")
+    } finally {
+      await refreshDashboard().catch(() => {
+        setToastMessage('Scan finished, but the dashboard failed to refresh — reload to see the latest data.')
+      })
+      setScanning((s) => ({ ...s, [id]: false }))
+    }
   }
 
   const handleScanAll = async () => {
     setScanAll(true)
     try {
       await scanAll()
-      await refreshDashboard()
-    } catch (e) { console.error('Scan all failed:', e) }
-    finally { setScanAll(false) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || "Scan all failed — some vendors' risk data may be stale.")
+    } finally {
+      await refreshDashboard().catch(() => {
+        setToastMessage('Scan finished, but the dashboard failed to refresh — reload to see the latest data.')
+      })
+      setScanAll(false)
+    }
   }
 
   const handleExportRegister = () => {
@@ -233,7 +256,7 @@ export default function Dashboard() {
                 aria-label="Filter vendors"
                 style={{
                   height: '34px',
-                  width: '180px',
+                  width: '200px',
                   paddingLeft: '28px',
                   paddingRight: searchValue ? '28px' : '10px',
                   background: 'var(--surface)',
@@ -242,16 +265,10 @@ export default function Dashboard() {
                   color: 'var(--hi)',
                   fontSize: '12px',
                   outline: 'none',
-                  transition: 'border-color 150ms, width 200ms',
+                  transition: 'border-color 150ms',
                 }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = 'var(--accent)'
-                  e.target.style.width = '220px'
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'var(--line)'
-                  e.target.style.width = '180px'
-                }}
+                onFocus={(e) => { e.target.style.borderColor = 'var(--accent)' }}
+                onBlur={(e) => { e.target.style.borderColor = 'var(--line)' }}
               />
               {searchValue && (
                 <button
@@ -496,6 +513,16 @@ export default function Dashboard() {
       {showModal && (
         <AddVendorModal onAdd={handleAdd} onClose={() => setShowModal(false)} />
       )}
+
+      {deleteTarget && (
+        <VendorDeleteModal
+          vendor={deleteTarget}
+          onConfirm={confirmDelete}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
+
+      <Toast message={toastMessage} onDismiss={() => setToastMessage('')} />
     </div>
   )
 }

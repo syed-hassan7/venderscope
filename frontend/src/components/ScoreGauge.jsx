@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react'
+import { riskLevel } from './RiskBadge'
 
-const riskColor = (s) => {
-  if (s >= 70) return 'var(--risk-high)'
-  if (s >= 35) return 'var(--risk-medium)'
-  return 'var(--risk-low)'
-}
-
-const riskLabel = (s) => {
-  if (s >= 70) return 'HIGH RISK'
-  if (s >= 35) return 'MEDIUM RISK'
-  return 'LOW RISK'
-}
+const RISK_COLOR = { high: 'var(--risk-high)', medium: 'var(--risk-medium)', low: 'var(--risk-low)' }
+const RISK_LABEL = { high: 'HIGH RISK', medium: 'MEDIUM RISK', low: 'LOW RISK' }
+const riskColor = (s) => RISK_COLOR[riskLevel(s)]
+const riskLabel = (s) => RISK_LABEL[riskLevel(s)]
 
 // Semicircle gauge: arc from (35,62) to (145,62) curving upward
 // Center (90,62), radius 55 — text sits cleanly below arc endpoints in SVG space
@@ -54,7 +48,7 @@ export default function ScoreGauge({ score = 0 }) {
           strokeDasharray="100"
           strokeDashoffset={100 - fill}
           style={{
-            transition: 'stroke-dashoffset 900ms cubic-bezier(0.34,1.2,0.64,1)',
+            transition: 'stroke-dashoffset 900ms cubic-bezier(0.16,1,0.3,1)',
             filter: `drop-shadow(0 0 5px ${color}44)`,
           }}
         />

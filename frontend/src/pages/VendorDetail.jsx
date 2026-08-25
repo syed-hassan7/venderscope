@@ -7,7 +7,9 @@ import CompliancePanel from '../components/CompliancePanel'
 import QuotaBanner from '../components/QuotaBanner'
 import VendorAvatar from '../components/VendorAvatar'
 import PageBackground from '../components/PageBackground'
-import RiskBadge from '../components/RiskBadge'
+import RiskBadge, { riskLevel } from '../components/RiskBadge'
+import Toast from '../components/Toast'
+import Tabs, { TabPanel } from '../components/Tabs'
 import { formatApiDateTime, parseApiDate } from '../utils/datetime'
 
 const SEVERITY_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
@@ -110,6 +112,9 @@ export default function VendorDetail() {
   const [updatingReview, setUpdatingReview] = useState(false)
   const [acceptances, setAcceptances] = useState([])
   const [loadError, setLoadError] = useState('')
+  const [toastMessage, setToastMessage] = useState('')
+  const [revokingIds, setRevokingIds] = useState(() => new Set())
+  const [activeTab, setActiveTab] = useState('overview')
 
   const fetchData = useCallback(async () => {
     setLoadError('')
@@ -144,7 +149,9 @@ export default function VendorDetail() {
     setScan(true)
     try {
       await scanVendor(id)
-    } catch (e) { console.error('Scan failed:', e) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || "Scan failed — this vendor's risk data may be stale.")
+    }
     finally {
       await fetchData()
       api.get('/quota').then((r) => setQuotaEx(r.data.exhausted)).catch(() => {})
@@ -157,7 +164,9 @@ export default function VendorDetail() {
     try {
       await setVendorContext(id, sensitivity)
       await fetchData()
-    } catch (e) { console.error('Context update failed:', e) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || 'Failed to update data sensitivity. Please try again.')
+    }
     finally { setUpdatingContext(false) }
   }
 
@@ -172,7 +181,9 @@ export default function VendorDetail() {
       a.download = `vendorscope_${vendor.name.replace(/\s+/g, '_').toLowerCase()}_report.pdf`
       a.click()
       URL.revokeObjectURL(url)
-    } catch (e) { console.error('PDF export failed:', e) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || 'PDF export failed. Please try again.')
+    }
     finally { setExporting(false) }
   }
 
@@ -184,7 +195,9 @@ export default function VendorDetail() {
       setNoteInput('')
       const res = await getNotes(id)
       setNotes(res.data)
-    } catch (e) { console.error('Add note failed:', e) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || 'Failed to add note. Please try again.')
+    }
     finally { setAddingNote(false) }
   }
 
@@ -192,7 +205,9 @@ export default function VendorDetail() {
     try {
       await deleteNote(id, noteId)
       setNotes((n) => n.filter((x) => x.id !== noteId))
-    } catch (e) { console.error('Delete note failed:', e) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || 'Failed to delete note. Please try again.')
+    }
   }
 
   const handleReviewUpdate = async (patch) => {
@@ -200,7 +215,9 @@ export default function VendorDetail() {
     try {
       await updateReview(id, patch)
       await fetchData()
-    } catch (e) { console.error('Review update failed:', e) }
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || 'Failed to update review schedule. Please try again.')
+    }
     finally { setUpdatingReview(false) }
   }
 
@@ -211,8 +228,15 @@ export default function VendorDetail() {
   }
 
   const handleRevoke = async (accId) => {
-    await revokeAcceptance(id, accId)
-    setAcceptances((a) => a.filter((x) => x.id !== accId))
+    setRevokingIds((s) => new Set(s).add(accId))
+    try {
+      await revokeAcceptance(id, accId)
+      setAcceptances((a) => a.filter((x) => x.id !== accId))
+    } catch (e) {
+      setToastMessage(e.response?.data?.detail || 'Failed to revoke risk acceptance. Please try again.')
+    } finally {
+      setRevokingIds((s) => { const n = new Set(s); n.delete(accId); return n })
+    }
   }
 
   if (loadError)
@@ -361,14 +385,27 @@ export default function VendorDetail() {
           </div>
         </div>
 
+        <Tabs
+          active={activeTab}
+          onChange={setActiveTab}
+          tabs={[
+            { key: 'overview', label: 'Overview' },
+            { key: 'compliance', label: 'Compliance' },
+            { key: 'events', label: events.length ? `Events (${events.length})` : 'Events' },
+            { key: 'notes', label: notes.length ? `Notes (${notes.length})` : 'Notes' },
+          ]}
+        />
+
         {/* Risk overview */}
+        <TabPanel id="overview" active={activeTab}>
         {(() => {
           const displayScore = vendor.effective_score ?? vendor.risk_score
-          const scoreColor = displayScore >= 70 ? 'var(--risk-high)' : displayScore >= 40 ? 'var(--risk-medium)' : 'var(--risk-low)'
+          const level = riskLevel(displayScore)
+          const scoreColor = { high: 'var(--risk-high)', medium: 'var(--risk-medium)', low: 'var(--risk-low)' }[level]
           const scheduleStatus = formatScheduleStatus(vendor)
           const hasTrend = history.length >= 2
           const scoreDelta = vendor.score_delta ?? 0
-          const riskBand = displayScore >= 70 ? 'High Risk' : displayScore >= 40 ? 'Medium Risk' : 'Low Risk'
+          const riskBand = { high: 'High Risk', medium: 'Medium Risk', low: 'Low Risk' }[level]
           const monitorState = vendor.last_scanned ? 'Actively tracked' : 'Awaiting first scan'
           return (
             <Panel className="mb-4" style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) both' }}>
@@ -513,14 +550,18 @@ export default function VendorDetail() {
                         Scoring Model
                       </p>
                       <div className="group relative inline-block">
-                        <span
-                          className="text-[11px] cursor-help"
-                          style={{ color: 'var(--lo)', borderBottom: '1px dotted #44445a' }}
+                        <button
+                          type="button"
+                          aria-describedby="scoring-model-explainer"
+                          className="text-[11px] cursor-help bg-transparent p-0"
+                          style={{ color: 'var(--lo)', borderBottom: '1px dotted #44445a', borderTop: 'none', borderLeft: 'none', borderRight: 'none' }}
                         >
                           How is this calculated?
-                        </span>
+                        </button>
                         <div
-                          className="absolute right-0 bottom-full mb-3 w-[min(22rem,calc(100vw-2rem))] rounded-xl p-4 text-xs hidden group-hover:block z-50"
+                          id="scoring-model-explainer"
+                          role="tooltip"
+                          className="absolute right-0 bottom-full mb-3 w-[min(22rem,calc(100vw-2rem))] rounded-xl p-4 text-xs hidden group-hover:block group-focus-within:block z-50"
                           style={{
                             background: 'var(--elevated)',
                             border: '1px solid var(--border)',
@@ -603,61 +644,26 @@ export default function VendorDetail() {
 
                     {(() => {
                       const current = vendor.data_sensitivity || 'standard'
-                      const isDefault = current === 'standard'
                       return (
-                        <>
-                          <button
-                            onClick={() => handleContextChange('standard')}
-                            className="w-full mb-2 py-2 px-3 rounded-lg text-[11px] flex items-center justify-between"
-                            style={{
-                              background: isDefault ? 'rgba(139,92,246,0.1)' : 'transparent',
-                              border: isDefault ? '1px solid rgba(139,92,246,0.3)' : '1px dashed var(--border)',
-                              color: isDefault ? 'var(--accent-l)' : 'var(--lo)',
-                              transition: 'background 200ms ease, border-color 200ms ease, color 200ms ease',
-                              cursor: isDefault ? 'default' : 'pointer',
-                            }}
-                          >
-                            <span className="font-medium">No adjustment</span>
-                            <span style={{ opacity: 0.7, fontSize: '10px' }}>default · 1.0×</span>
-                          </button>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                            {SENSITIVITY_OPTIONS.filter((o) => o.value !== 'standard').map(({ value, label, hint }) => {
-                              const isSelected = current === value
-                              return (
-                                <button
-                                  key={value}
-                                  onClick={() => handleContextChange(value)}
-                                  className="py-2.5 px-3 rounded-lg text-left"
-                                  style={{
-                                    background: isSelected ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.02)',
-                                    border: isSelected ? '1px solid rgba(139,92,246,0.35)' : '1px solid rgba(255,255,255,0.05)',
-                                    color: isSelected ? 'var(--accent-l)' : 'var(--lo)',
-                                    cursor: isSelected ? 'default' : 'pointer',
-                                    transition: 'background 200ms ease, border-color 200ms ease, color 200ms ease',
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    if (!isSelected) {
-                                      e.currentTarget.style.background = 'rgba(255,255,255,0.05)'
-                                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'
-                                      e.currentTarget.style.color = 'var(--mid)'
-                                    }
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    if (!isSelected) {
-                                      e.currentTarget.style.background = 'rgba(255,255,255,0.02)'
-                                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)'
-                                      e.currentTarget.style.color = 'var(--lo)'
-                                    }
-                                  }}
-                                >
-                                  <div className="text-[11px] font-medium leading-tight">{label}</div>
-                                  <div className="text-[10px] mt-1" style={{ color: isSelected ? 'rgba(167,139,250,0.72)' : 'var(--border)' }}>{hint}</div>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </>
+                        <select
+                          value={current}
+                          onChange={(e) => handleContextChange(e.target.value)}
+                          aria-label="Data sensitivity"
+                          className="w-full py-2.5 px-3 rounded-lg text-[12px] outline-none"
+                          style={{
+                            background: 'var(--elevated)',
+                            border: '1px solid var(--border)',
+                            color: 'var(--hi)',
+                            cursor: 'pointer',
+                            colorScheme: 'dark',
+                          }}
+                        >
+                          {SENSITIVITY_OPTIONS.map(({ value, label, hint }) => (
+                            <option key={value} value={value}>
+                              {label} — {hint}{value === 'standard' ? ' (default)' : ''}
+                            </option>
+                          ))}
+                        </select>
                       )
                     })()}
                   </div>
@@ -685,68 +691,35 @@ export default function VendorDetail() {
 
                     {(() => {
                       const current = vendor.review_interval_days ?? null
-                      const isNone = current === null
+                      const REVIEW_OPTIONS = [
+                        { value: 'none', label: 'No schedule (default)' },
+                        { value: '30',   label: '30 days' },
+                        { value: '60',   label: '60 days' },
+                        { value: '90',   label: '90 days' },
+                        { value: '180',  label: '180 days' },
+                        { value: '365',  label: 'Annually' },
+                      ]
                       return (
-                        <>
-                          <button
-                            onClick={() => handleReviewUpdate({ interval_days: null })}
-                            className="w-full mb-2 py-2 px-3 rounded-lg text-[11px] flex items-center justify-between"
-                            style={{
-                              background: isNone ? 'rgba(139,92,246,0.1)' : 'transparent',
-                              border: isNone ? '1px solid rgba(139,92,246,0.3)' : '1px dashed var(--border)',
-                              color: isNone ? 'var(--accent-l)' : 'var(--lo)',
-                              transition: 'background 200ms ease, border-color 200ms ease, color 200ms ease',
-                              cursor: isNone ? 'default' : 'pointer',
-                            }}
-                          >
-                            <span className="font-medium">No schedule</span>
-                            <span style={{ opacity: 0.7, fontSize: '10px' }}>default</span>
-                          </button>
-
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
-                            {[
-                              { value: 30,  label: '30 days' },
-                              { value: 60,  label: '60 days' },
-                              { value: 90,  label: '90 days' },
-                              { value: 180, label: '180 days' },
-                              { value: 365, label: 'Annually' },
-                            ].map(({ value, label }) => {
-                              const isSelected = current === value
-                              return (
-                                <button
-                                  key={value}
-                                  onClick={() => handleReviewUpdate({ interval_days: value })}
-                                  className="py-2.5 px-2 rounded-lg text-center"
-                                  style={{
-                                    background: isSelected ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.02)',
-                                    border: isSelected ? '1px solid rgba(139,92,246,0.35)' : '1px solid rgba(255,255,255,0.05)',
-                                    color: isSelected ? 'var(--accent-l)' : 'var(--lo)',
-                                    cursor: isSelected ? 'default' : 'pointer',
-                                    transition: 'background 200ms ease, border-color 200ms ease, color 200ms ease',
-                                    fontSize: '10px',
-                                    fontWeight: isSelected ? 600 : 400,
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    if (!isSelected) {
-                                      e.currentTarget.style.background = 'rgba(255,255,255,0.05)'
-                                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'
-                                      e.currentTarget.style.color = 'var(--mid)'
-                                    }
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    if (!isSelected) {
-                                      e.currentTarget.style.background = 'rgba(255,255,255,0.02)'
-                                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)'
-                                      e.currentTarget.style.color = 'var(--lo)'
-                                    }
-                                  }}
-                                >
-                                  {label}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </>
+                        <select
+                          value={current === null ? 'none' : String(current)}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            handleReviewUpdate({ interval_days: v === 'none' ? null : Number(v) })
+                          }}
+                          aria-label="Review schedule"
+                          className="w-full mb-2 py-2.5 px-3 rounded-lg text-[12px] outline-none"
+                          style={{
+                            background: 'var(--elevated)',
+                            border: '1px solid var(--border)',
+                            color: 'var(--hi)',
+                            cursor: 'pointer',
+                            colorScheme: 'dark',
+                          }}
+                        >
+                          {REVIEW_OPTIONS.map(({ value, label }) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
                       )
                     })()}
 
@@ -778,6 +751,7 @@ export default function VendorDetail() {
         {/* Vendor Profile — always rendered for stable layout */}
         <Panel className="mb-4" style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) 50ms both' }}>
           <PanelTitle meta="(auto-discovered)">Vendor Profile</PanelTitle>
+
           <div className="mb-5 min-h-[3.5rem]">
             <p className="text-sm leading-relaxed" style={{ color: vendor.description ? 'var(--mid)' : 'var(--lo)' }}>
               {vendor.description || 'No vendor profile description detected from public sources.'}
@@ -815,15 +789,19 @@ export default function VendorDetail() {
             </div>
           </div>
         </Panel>
+        </TabPanel>
 
         {/* Compliance */}
-        <Panel className="mb-4" style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) 100ms both' }}>
+        <TabPanel id="compliance" active={activeTab}>
+        <Panel className="mb-4" style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) both' }}>
           <PanelTitle meta="(auto-discovered from public sources)">Compliance Posture</PanelTitle>
           <CompliancePanel compliance={vendor.compliance} />
         </Panel>
+        </TabPanel>
 
         {/* Risk Events */}
-        <Panel style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) 150ms both' }}>
+        <TabPanel id="events" active={activeTab}>
+        <Panel style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) both' }}>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--hi)' }}>
               Risk Events{' '}
@@ -849,11 +827,13 @@ export default function VendorDetail() {
               </button>
             )}
           </div>
-          <EventFeed events={displayedEvents} acceptances={acceptances} onAccept={handleAccept} onRevoke={handleRevoke} />
+          <EventFeed events={displayedEvents} acceptances={acceptances} onAccept={handleAccept} onRevoke={handleRevoke} revokingIds={revokingIds} />
         </Panel>
+        </TabPanel>
 
         {/* Analyst Notes */}
-        <Panel className="mt-4" style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) 200ms both' }}>
+        <TabPanel id="notes" active={activeTab}>
+        <Panel style={{ animation: 'fade-up 260ms cubic-bezier(0.16,1,0.3,1) both' }}>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--hi)' }}>
               Analyst Notes{' '}
@@ -1013,8 +993,11 @@ export default function VendorDetail() {
             </div>
           )}
         </Panel>
+        </TabPanel>
 
       </div>
+
+      <Toast message={toastMessage} onDismiss={() => setToastMessage('')} />
       </div>
     )
 }
