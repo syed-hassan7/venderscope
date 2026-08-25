@@ -1,19 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { register as apiRegister } from '../api/client'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { googleLoginStart } from '../api/client'
 import VSLogo from '../components/VSLogo'
 
 export default function Register() {
-  const { user, login } = useAuth()
+  const { user, registerWithPasskey } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
-  const [email, setEmail]       = useState('')
-  const [password, setPassword] = useState('')
-  const [confirm, setConfirm]   = useState('')
+  const [email, setEmail]       = useState(searchParams.get('email') || '')
+  const [recoveryCodes, setRecoveryCodes] = useState([])
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [visible, setVisible]   = useState(false)
+  const [step, setStep]         = useState('email')
   const emailRef = useRef(null)
 
   useEffect(() => {
@@ -25,25 +26,31 @@ export default function Register() {
     emailRef.current?.focus()
   }, [])
 
-  const handleSubmit = async (e) => {
+  const handleCreatePasskey = async (e) => {
     e.preventDefault()
     setError('')
-
-    if (password !== confirm) { setError('Passwords do not match.'); return }
-    if (password.length < 12) { setError('Password must be at least 12 characters.'); return }
-    if (!/[A-Z]/.test(password)) { setError('Password must contain at least one uppercase letter.'); return }
-    if (!/[0-9]/.test(password)) { setError('Password must contain at least one number.'); return }
-
+    if (!email.trim()) {
+      setError('Enter your email address.')
+      return
+    }
     setLoading(true)
     try {
-      await apiRegister({ email, password })
-      await login(email, password)
-      navigate('/', { replace: true })
+      const data = await registerWithPasskey(email.trim())
+      if (data.recovery_codes?.length) {
+        setRecoveryCodes(data.recovery_codes)
+        setStep('recovery')
+      } else {
+        navigate('/', { replace: true })
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed. Please try again.')
+      setError(err.response?.data?.detail || err.message || 'Registration failed. Please try again.')
     } finally {
       setLoading(false)
     }
+  }
+
+  const copyCodes = () => {
+    navigator.clipboard?.writeText(recoveryCodes.join('\n'))
   }
 
   const reveal = (delayMs) => ({
@@ -119,7 +126,40 @@ export default function Register() {
             Create your account
           </p>
 
-          <form onSubmit={handleSubmit} method="post" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {step === 'recovery' ? (
+            <div>
+              <p style={{ fontSize: 13, color: 'var(--mid)', marginBottom: 12, lineHeight: 1.5 }}>
+                Save these recovery codes somewhere safe. Each code works once if you lose your passkey.
+                <strong style={{ color: 'var(--hi)' }}> They will not be shown again.</strong>
+              </p>
+              <div
+                style={{
+                  background: 'var(--input)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: 'var(--hi)',
+                  lineHeight: 1.8,
+                  marginBottom: 12,
+                }}
+              >
+                {recoveryCodes.map((code) => <div key={code}>{code}</div>)}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <button type="button" onClick={copyCodes} style={secondaryBtnStyle}>Copy codes</button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/', { replace: true })}
+                  style={primaryBtnStyle}
+                >
+                  I saved them — continue
+                </button>
+              </div>
+            </div>
+          ) : (
+          <form onSubmit={handleCreatePasskey} method="post" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
             <div style={reveal(430)}>
               <LoginField
@@ -134,37 +174,10 @@ export default function Register() {
             </div>
 
             <div style={reveal(510)}>
-              <LoginField
-                label="Password"
-                type="password"
-                value={password}
-                onChange={setPassword}
-                placeholder="Min. 12 chars, 1 uppercase, 1 number"
-                autoComplete="new-password"
-              />
+              <p style={{ fontSize: 12, color: 'var(--lo)', lineHeight: 1.5 }}>
+                New accounts use a passkey (Touch ID, Windows Hello, or device PIN). No password.
+              </p>
             </div>
-
-            <div style={reveal(590)}>
-              <LoginField
-                label="Confirm password"
-                type="password"
-                value={confirm}
-                onChange={setConfirm}
-                placeholder="••••••••"
-                autoComplete="new-password"
-              />
-            </div>
-
-            {/* Requirements hint */}
-            <p style={{
-              fontSize: 11,
-              color: 'var(--lo)',
-              lineHeight: 1.5,
-              paddingLeft: 2,
-              ...reveal(640),
-            }}>
-              12+ characters · uppercase letter · number
-            </p>
 
             {error && (
               <div style={{
@@ -220,11 +233,23 @@ export default function Register() {
                 onMouseDown={(e) => { if (!loading) e.currentTarget.style.transform = 'translateY(0) scale(0.98)' }}
                 onMouseUp={(e) => { if (!loading) e.currentTarget.style.transform = 'translateY(-1px) scale(1)' }}
               >
-                {loading ? <SpinnerRow label="Creating account…" /> : 'Create account'}
+                {loading ? <SpinnerRow label="Creating passkey…" /> : 'Create passkey'}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 4, ...reveal(760) }}>
+              <button
+                type="button"
+                onClick={() => googleLoginStart()}
+                style={secondaryBtnStyle}
+                aria-label="Continue with Google"
+              >
+                Continue with Google
               </button>
             </div>
 
           </form>
+          )}
         </div>
 
         {/* Footer link */}
@@ -319,4 +344,30 @@ function SpinnerRow({ label }) {
       {label}
     </span>
   )
+}
+
+const primaryBtnStyle = {
+  flex: 1,
+  minHeight: 46,
+  padding: '12px 20px',
+  borderRadius: 12,
+  border: 'none',
+  background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: 'pointer',
+}
+
+const secondaryBtnStyle = {
+  width: '100%',
+  minHeight: 44,
+  padding: '10px 16px',
+  borderRadius: 12,
+  border: '1px solid var(--border)',
+  background: 'rgba(255,255,255,0.04)',
+  color: 'var(--mid)',
+  fontSize: 13,
+  fontWeight: 500,
+  cursor: 'pointer',
 }

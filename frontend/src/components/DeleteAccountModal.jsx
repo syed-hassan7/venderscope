@@ -1,21 +1,55 @@
-import { useState } from 'react'
-import { deleteAccount } from '../api/client'
-import { clearAccessToken } from '../api/client'
+import { useState, useEffect } from 'react'
+import {
+  deleteAccount,
+  webauthnStepUpBegin,
+  getMe,
+  clearAccessToken,
+} from '../api/client'
+import { getPasskeyAssertion } from '../auth/webauthn'
 
 export default function DeleteAccountModal({ onClose }) {
-  const [step, setStep] = useState(1)       // 1 = warning, 2 = confirm
+  const [step, setStep] = useState(1)
   const [input, setInput] = useState('')
   const [password, setPassword] = useState('')
+  const [recoveryCode, setRecoveryCode] = useState('')
+  const [factors, setFactors] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  useEffect(() => {
+    getMe().then(({ data }) => setFactors(data.factors)).catch(() => {})
+  }, [])
+
   const confirmed = input === 'DELETE'
+  const usePassword = factors?.password
+  const useRecovery = !usePassword && (factors?.recovery_codes_remaining > 0)
+  const usePasskey = !usePassword && !useRecovery && (factors?.passkey_count > 0)
 
   const handleClose = () => {
     setInput('')
     setPassword('')
+    setRecoveryCode('')
     setError('')
     onClose()
+  }
+
+  const buildDeletePayload = async () => {
+    if (usePassword) {
+      return { method: 'password', password }
+    }
+    if (useRecovery) {
+      return { method: 'recovery', recovery_code: recoveryCode }
+    }
+    if (usePasskey) {
+      const { data: options } = await webauthnStepUpBegin()
+      const payload = await getPasskeyAssertion(options)
+      return {
+        method: 'webauthn',
+        challenge_id: payload.challenge_id,
+        credential: payload.credential,
+      }
+    }
+    throw new Error('No verification method available')
   }
 
   const handleDelete = async () => {
@@ -23,14 +57,15 @@ export default function DeleteAccountModal({ onClose }) {
     setLoading(true)
     setError('')
     try {
-      await deleteAccount({ password })
+      const body = await buildDeletePayload()
+      await deleteAccount(body)
       clearAccessToken()
       window.location.href = '/login?deleted=1'
     } catch (e) {
       if (e.response?.status === 401) {
-        setError('Incorrect password')
+        setError('Verification failed')
       } else {
-        setError(e.response?.data?.detail || 'Something went wrong. Please try again.')
+        setError(e.response?.data?.detail || e.message || 'Something went wrong. Please try again.')
       }
       setLoading(false)
     }
@@ -48,7 +83,6 @@ export default function DeleteAccountModal({ onClose }) {
       >
         {step === 1 ? (
           <>
-            {/* Step 1 — Warning */}
             <div className="flex items-center gap-3 mb-5">
               <div
                 className="flex items-center justify-center rounded-xl w-10 h-10 shrink-0"
@@ -101,8 +135,6 @@ export default function DeleteAccountModal({ onClose }) {
                 onClick={() => setStep(2)}
                 className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all"
                 style={{ background: '#dc2626', color: '#fff' }}
-                onMouseEnter={(e) => e.currentTarget.style.background = '#b91c1c'}
-                onMouseLeave={(e) => e.currentTarget.style.background = '#dc2626'}
               >
                 Continue →
               </button>
@@ -110,12 +142,10 @@ export default function DeleteAccountModal({ onClose }) {
           </>
         ) : (
           <>
-            {/* Step 2 — Type DELETE */}
             <div className="mb-5">
               <h2 className="font-bold text-base mb-1" style={{ color: 'var(--hi)' }}>Confirm Deletion</h2>
               <p className="text-sm" style={{ color: 'var(--mid)' }}>
-                Type <span style={{ color: 'var(--risk-high)', fontWeight: 700, fontFamily: 'monospace' }}>DELETE</span> in
-                the field below to permanently delete your account.
+                Type <span style={{ color: 'var(--risk-high)', fontWeight: 700, fontFamily: 'monospace' }}>DELETE</span> to confirm.
               </p>
             </div>
 
@@ -135,21 +165,39 @@ export default function DeleteAccountModal({ onClose }) {
               }}
             />
 
-            <label className="block text-xs mb-1" style={{ color: 'var(--lo)' }}>
-              Enter your password to confirm
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => { setPassword(e.target.value); setError('') }}
-              placeholder="Your account password"
-              className="w-full px-4 py-3 rounded-xl text-sm mb-4 outline-none transition-all"
-              style={{
-                background: 'var(--elevated)',
-                border: '1px solid var(--border)',
-                color: '#e2e8f0',
-              }}
-            />
+            {usePassword && (
+              <>
+                <label className="block text-xs mb-1" style={{ color: 'var(--lo)' }}>Enter your password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); setError('') }}
+                  placeholder="Your account password"
+                  className="w-full px-4 py-3 rounded-xl text-sm mb-4 outline-none"
+                  style={{ background: 'var(--elevated)', border: '1px solid var(--border)', color: '#e2e8f0' }}
+                />
+              </>
+            )}
+
+            {useRecovery && (
+              <>
+                <label className="block text-xs mb-1" style={{ color: 'var(--lo)' }}>Enter a recovery code</label>
+                <input
+                  type="text"
+                  value={recoveryCode}
+                  onChange={(e) => { setRecoveryCode(e.target.value); setError('') }}
+                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                  className="w-full px-4 py-3 rounded-xl text-sm mb-4 outline-none"
+                  style={{ background: 'var(--elevated)', border: '1px solid var(--border)', color: '#e2e8f0' }}
+                />
+              </>
+            )}
+
+            {usePasskey && (
+              <p className="text-xs mb-4" style={{ color: 'var(--lo)' }}>
+                Passkey verification runs when you confirm deletion.
+              </p>
+            )}
 
             {error && (
               <p className="text-xs mb-3" style={{ color: '#f87171' }}>{error}</p>
@@ -157,32 +205,19 @@ export default function DeleteAccountModal({ onClose }) {
 
             <div className="flex flex-col sm:flex-row gap-3">
               <button
-                onClick={() => { setStep(1); setInput(''); setPassword(''); setError('') }}
-                className="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
-                style={{
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  color: 'var(--mid)',
-                }}
+                onClick={() => { setStep(1); setInput(''); setPassword(''); setRecoveryCode(''); setError('') }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--mid)' }}
               >
                 ← Back
               </button>
               <button
                 onClick={handleDelete}
                 disabled={!confirmed || loading}
-                className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-30"
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-30"
                 style={{ background: '#dc2626', color: '#fff' }}
-                onMouseEnter={(e) => { if (confirmed && !loading) e.currentTarget.style.background = '#b91c1c' }}
-                onMouseLeave={(e) => e.currentTarget.style.background = '#dc2626'}
               >
-                {loading ? (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31.4 31.4" strokeLinecap="round"/>
-                    </svg>
-                    Deleting…
-                  </span>
-                ) : 'Delete My Account'}
+                {loading ? 'Deleting…' : 'Delete My Account'}
               </button>
             </div>
           </>

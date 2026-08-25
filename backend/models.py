@@ -18,10 +18,73 @@ class User(Base):
 
     id            = Column(String(36), primary_key=True, default=_new_uuid, index=True)
     email         = Column(String, unique=True, nullable=False, index=True)
-    password_hash = Column(String, nullable=False)
+    password_hash = Column(String, nullable=True)
+    google_sub    = Column(String(128), unique=True, nullable=True, index=True)
     created_at    = Column(DateTime, default=_utcnow)
 
     vendors = relationship("Vendor", back_populates="owner", cascade="all, delete")
+    webauthn_credentials = relationship(
+        "WebAuthnCredential", back_populates="user", cascade="all, delete-orphan"
+    )
+    recovery_codes = relationship(
+        "RecoveryCodeHash", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class WebAuthnCredential(Base):
+    __tablename__ = "webauthn_credentials"
+
+    id              = Column(String(36), primary_key=True, default=_new_uuid)
+    user_id         = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    credential_id   = Column(String(512), unique=True, nullable=False, index=True)
+    public_key      = Column(Text, nullable=False)
+    sign_count      = Column(Integer, nullable=False, default=0)
+    aaguid          = Column(String(36), nullable=True)
+    transports      = Column(String(128), nullable=True)
+    device_label    = Column(String(128), nullable=True)
+    created_at      = Column(DateTime, default=_utcnow)
+    last_used_at    = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="webauthn_credentials")
+
+
+class WebAuthnChallenge(Base):
+    __tablename__ = "webauthn_challenges"
+
+    id         = Column(String(36), primary_key=True, default=_new_uuid)
+    user_id    = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    email      = Column(String, nullable=True)
+    challenge  = Column(String(512), nullable=False)
+    purpose    = Column(String(32), nullable=False)  # register | assert | step_up
+    expires_at = Column(DateTime, nullable=False, index=True)
+    used_at    = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class RecoveryCodeHash(Base):
+    __tablename__ = "recovery_code_hashes"
+
+    id         = Column(String(36), primary_key=True, default=_new_uuid)
+    user_id    = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    code_hash  = Column(String(128), nullable=False)
+    used_at    = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+    user = relationship("User", back_populates="recovery_codes")
+
+
+class OAuthState(Base):
+    """Short-lived PKCE state for Google OAuth."""
+    __tablename__ = "oauth_states"
+
+    id            = Column(String(36), primary_key=True, default=_new_uuid)
+    state         = Column(String(64), unique=True, nullable=False, index=True)
+    code_verifier = Column(String(128), nullable=False)
+    nonce         = Column(String(64), nullable=False)
+    purpose       = Column(String(16), nullable=False)  # login | link
+    user_id       = Column(String(36), ForeignKey("users.id"), nullable=True)
+    expires_at    = Column(DateTime, nullable=False, index=True)
+    created_at    = Column(DateTime, default=_utcnow)
 
 
 class Vendor(Base):

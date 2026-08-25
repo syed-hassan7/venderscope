@@ -1,16 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { googleLoginStart } from '../api/client'
 import VSLogo from '../components/VSLogo'
 
 export default function Login() {
-  const { login, user } = useAuth()
+  const { login, loginWithPasskey, loginWithRecovery, user } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const accountDeleted = searchParams.get('deleted') === '1'
+  const googleError = searchParams.get('error') === 'google_conflict'
 
   const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
+  const [recoveryCode, setRecoveryCode] = useState('')
+  const [mode, setMode]         = useState('password')
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [visible, setVisible]   = useState(false)
@@ -30,11 +34,29 @@ export default function Login() {
     setError('')
     setLoading(true)
     try {
-      await login(email, password)
+      if (mode === 'recovery') {
+        await loginWithRecovery(email, recoveryCode)
+      } else {
+        await login(email, password)
+      }
       navigate('/', { replace: true })
     } catch (err) {
       const detail = err.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'Login failed. Please try again.')
+      setError(typeof detail === 'string' ? detail : err.message || 'Login failed. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handlePasskeyLogin = async () => {
+    setError('')
+    setLoading(true)
+    try {
+      await loginWithPasskey(email.trim() || undefined)
+      navigate('/', { replace: true })
+    } catch (err) {
+      const detail = err.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : err.message || 'Passkey sign-in failed.')
     } finally {
       setLoading(false)
     }
@@ -93,7 +115,21 @@ export default function Login() {
           Continuous vendor risk intelligence
         </p>
 
-        {/* Account-deleted notice */}
+        {googleError && (
+          <div style={{ marginBottom: 16, ...reveal(280) }}>
+            <div style={{
+              background: 'rgba(255,68,68,0.06)',
+              border: '1px solid rgba(255,68,68,0.18)',
+              borderRadius: 12,
+              padding: '11px 16px',
+              fontSize: 13,
+              color: '#ff6b6b',
+              textAlign: 'center',
+            }}>
+              That Google account matches an existing email. Sign in with password or passkey first, then link Google.
+            </div>
+          </div>
+        )}
         {accountDeleted && (
           <div style={{ marginBottom: 16, ...reveal(260) }}>
             <div style={{
@@ -147,15 +183,34 @@ export default function Login() {
             </div>
 
             <div style={reveal(540)}>
-              <LoginField
-                label="Password"
-                type="password"
-                value={password}
-                onChange={setPassword}
-                placeholder="••••••••"
-                autoComplete="current-password"
-              />
+              {mode === 'recovery' ? (
+                <LoginField
+                  label="Recovery code"
+                  type="text"
+                  value={recoveryCode}
+                  onChange={setRecoveryCode}
+                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                  autoComplete="one-time-code"
+                />
+              ) : (
+                <LoginField
+                  label="Password"
+                  type="password"
+                  value={password}
+                  onChange={setPassword}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                />
+              )}
             </div>
+
+            <p style={{ fontSize: 11, color: 'var(--lo)' }}>
+              {mode === 'recovery' ? (
+                <button type="button" onClick={() => setMode('password')} style={linkBtnStyle}>Use password instead</button>
+              ) : (
+                <button type="button" onClick={() => setMode('recovery')} style={linkBtnStyle}>Use a recovery code</button>
+              )}
+            </p>
 
             {error && (
               <div style={{
@@ -212,7 +267,27 @@ export default function Login() {
                 onMouseDown={(e) => { if (!loading) e.currentTarget.style.transform = 'translateY(0) scale(0.98)' }}
                 onMouseUp={(e) => { if (!loading) e.currentTarget.style.transform = 'translateY(-1px) scale(1)' }}
               >
-                {loading ? <SpinnerRow label="Signing in…" /> : 'Sign in'}
+                {loading ? <SpinnerRow label="Signing in…" /> : (mode === 'recovery' ? 'Sign in with code' : 'Sign in')}
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, ...reveal(680) }}>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={handlePasskeyLogin}
+                style={altBtnStyle}
+                aria-label="Sign in with passkey"
+              >
+                Sign in with passkey
+              </button>
+              <button
+                type="button"
+                onClick={() => googleLoginStart()}
+                style={altBtnStyle}
+                aria-label="Continue with Google"
+              >
+                Continue with Google
               </button>
             </div>
           </form>
@@ -322,4 +397,27 @@ function SpinnerRow({ label }) {
       {label}
     </span>
   )
+}
+
+const altBtnStyle = {
+  width: '100%',
+  minHeight: 44,
+  padding: '10px 16px',
+  borderRadius: 12,
+  border: '1px solid var(--border)',
+  background: 'rgba(255,255,255,0.04)',
+  color: 'var(--mid)',
+  fontSize: 13,
+  fontWeight: 500,
+  cursor: 'pointer',
+}
+
+const linkBtnStyle = {
+  background: 'none',
+  border: 'none',
+  color: 'var(--accent-l)',
+  fontSize: 11,
+  cursor: 'pointer',
+  padding: 0,
+  textDecoration: 'underline',
 }

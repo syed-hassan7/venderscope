@@ -35,6 +35,22 @@ VITE_API_URL=/api
 ```
 
 Use the same-origin `/api` path (not the HF Space URL). Direct browser calls to HF break credentialed auth/CORS.
+
+### Hugging Face Space secrets (auth)
+
+Set on the HF Space (not in git):
+
+| Variable | Purpose |
+|----------|---------|
+| `WEBAUTHN_RP_ID` | `venderscope.vercel.app` (prod) or `localhost` (dev) |
+| `WEBAUTHN_RP_NAME` | `VenderScope` |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth secret |
+| `GOOGLE_REDIRECT_URI` | `https://venderscope.vercel.app/api/auth/google/callback` |
+| `RECOVERY_CODE_PEPPER` | Long random secret for recovery-code hashing |
+
+Google Cloud OAuth client: authorized origin `https://venderscope.vercel.app` (+ localhost for dev).
+
 ## Structure
 
 ```

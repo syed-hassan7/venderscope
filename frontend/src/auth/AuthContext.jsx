@@ -1,25 +1,31 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { login as apiLogin, logout as apiLogout, refresh as apiRefresh } from '../api/client'
+import {
+  login as apiLogin,
+  logout as apiLogout,
+  refresh as apiRefresh,
+  webauthnAssertBegin,
+  webauthnAssertFinish,
+  webauthnRegisterBegin,
+  webauthnRegisterFinish,
+  recoveryConsume,
+  getMe,
+  ping,
+} from '../api/client'
 import { setAccessToken, clearAccessToken } from '../api/client'
+import { createPasskey, getPasskeyAssertion, isWebAuthnSupported } from './webauthn'
 
 const AuthContext = createContext(null)
 
-// Cold HF Space boot is ~30-50s (see README) — bounded but generous, and only
-// applied here, not to every request, so a genuinely dead backend still fails fast
-// everywhere else in the app.
 const REFRESH_TIMEOUT_MS = 45000
 
 export function AuthProvider({ children }) {
-  const [user, setUser]         = useState(null)   // { email } once decoded from token
-  const [loading, setLoading]   = useState(true)   // true during initial silent refresh
-  const [authError, setAuthError] = useState(null) // 'unreachable' | null
-  const _refreshSeq = useRef(0) // guards against overlapping silentRefresh calls
-  // (StrictMode double-mount, or a fast retry firing before the prior one settles)
-  // clobbering fresher state with a stale result — refresh tokens are single-use,
-  // so a superseded call can legitimately 401 even though a newer one already won
+  const [user, setUser]         = useState(null)
+  const [factors, setFactors]   = useState(null)
+  const [loading, setLoading]   = useState(true)
+  const [authError, setAuthError] = useState(null)
+  const _refreshSeq = useRef(0)
 
-  // Decode the user email from a JWT without verifying (verification happens server-side)
   const _parseToken = (token) => {
     try {
       const payload = JSON.parse(atob(token.split('.')[1]))
@@ -29,17 +35,27 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // A reverse-proxy fronting a cold/dead backend (Vercel rewrite -> HF Space)
-  // typically answers with a real 502/503/504, not a bare network failure — treat
-  // those the same as "no response" so the cold-start retry path actually triggers.
+  const _loadMe = async () => {
+    try {
+      const { data } = await getMe()
+      setUser((prev) => ({ ...(prev || {}), email: data.email }))
+      setFactors(data.factors)
+    } catch {
+      // best-effort
+    }
+  }
+
   const _isUnreachable = (err) =>
     !err.response || [502, 503, 504].includes(err.response.status)
 
-  // Called on mount (and on manual retry) — attempts silent login via the httpOnly
-  // refresh cookie. Retries once on unreachable-backend errors only (network/timeout/
-  // 502/503/504 — consistent with a cold start still booting); a real HTTP response
-  // otherwise (e.g. 401, no valid cookie) fails immediately and sends the user to
-  // login as before.
+  const _wakeBackend = async () => {
+    try {
+      await ping({ timeout: REFRESH_TIMEOUT_MS })
+    } catch {
+      // cold start probe — best effort
+    }
+  }
+
   const silentRefresh = useCallback(async () => {
     const seq = ++_refreshSeq.current
     setAuthError(null)
@@ -53,14 +69,16 @@ export function AuthProvider({ children }) {
         if (!_isUnreachable(err)) throw err
         res = await attempt()
       }
-      if (_refreshSeq.current !== seq) return // superseded by a newer call
+      if (_refreshSeq.current !== seq) return
       setAccessToken(res.data.access_token)
       setUser(_parseToken(res.data.access_token))
+      await _loadMe()
     } catch (err) {
       if (_refreshSeq.current !== seq) return
       if (_isUnreachable(err)) setAuthError('unreachable')
       clearAccessToken()
       setUser(null)
+      setFactors(null)
     } finally {
       if (_refreshSeq.current === seq) setLoading(false)
     }
@@ -72,13 +90,53 @@ export function AuthProvider({ children }) {
   }, [silentRefresh])
 
   useEffect(() => {
-    silentRefresh()
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('oauth') === '1') {
+      silentRefresh()
+      params.delete('oauth')
+      const url = new URL(window.location.href)
+      url.search = params.toString()
+      window.history.replaceState({}, '', url.pathname + (url.search ? `?${url.search}` : ''))
+    } else {
+      silentRefresh()
+    }
   }, [silentRefresh])
+
+  const _applySession = (accessToken) => {
+    setAccessToken(accessToken)
+    setUser(_parseToken(accessToken))
+    return _loadMe()
+  }
 
   const login = async (email, password) => {
     const { data } = await apiLogin({ email, password })
-    setAccessToken(data.access_token)
-    setUser(_parseToken(data.access_token))
+    await _applySession(data.access_token)
+    return data
+  }
+
+  const loginWithPasskey = async (email) => {
+    if (!isWebAuthnSupported()) throw new Error('Passkeys are not supported in this browser')
+    await _wakeBackend()
+    const { data: options } = await webauthnAssertBegin(email ? { email } : {})
+    const payload = await getPasskeyAssertion(options)
+    const { data } = await webauthnAssertFinish(payload)
+    await _applySession(data.access_token)
+    return data
+  }
+
+  const loginWithRecovery = async (email, code) => {
+    const { data } = await recoveryConsume({ email, code })
+    await _applySession(data.access_token)
+    return data
+  }
+
+  const registerWithPasskey = async (email) => {
+    if (!isWebAuthnSupported()) throw new Error('Passkeys are not supported in this browser')
+    await _wakeBackend()
+    const { data: options } = await webauthnRegisterBegin({ email })
+    const payload = await createPasskey(options)
+    const { data } = await webauthnRegisterFinish(payload)
+    await _applySession(data.access_token)
     return data
   }
 
@@ -88,11 +146,25 @@ export function AuthProvider({ children }) {
     } finally {
       clearAccessToken()
       setUser(null)
+      setFactors(null)
     }
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, authError, retryAuth, login, logout: logoutUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        factors,
+        loading,
+        authError,
+        retryAuth,
+        login,
+        loginWithPasskey,
+        loginWithRecovery,
+        registerWithPasskey,
+        logout: logoutUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )

@@ -73,6 +73,21 @@ if not _is_sqlite:
             EXCEPTION WHEN duplicate_object THEN NULL;
             END $$
         """))
+        _conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(128)"))
+        _conn.execute(text(
+            "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"
+        ))
+        _conn.commit()
+
+# Auth factor tables — SQLite column migration + new tables via create_all
+if _is_sqlite:
+    with engine.connect() as _conn:
+        _user_cols = {row[1] for row in _conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+        if "google_sub" not in _user_cols:
+            _conn.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR(128)"))
+            print("[Migration] Added column: users.google_sub")
+        # SQLite cannot DROP NOT NULL easily; password_hash stays NOT NULL on old DBs until
+        # recreated — new installs get nullable from models. Tests use fresh create_all.
         _conn.commit()
 
 # ── Security headers middleware ─────────────────────────────────────────────

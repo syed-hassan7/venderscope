@@ -29,6 +29,30 @@ VALID_EMAIL = f"testuser_{uuid.uuid4().hex[:8]}@example.com"
 VALID_PASS  = "SecureP@ss123!"
 
 
+def create_password_user(email: str, password: str) -> None:
+    """Insert a legacy password user directly (password register endpoint is closed)."""
+    from database import SessionLocal
+    from models import User
+    from services.auth_service import hash_password
+    db = SessionLocal()
+    existing = db.query(User).filter(User.email == email.lower()).first()
+    if existing:
+        db.close()
+        return
+    db.add(
+        User(
+            id=str(uuid.uuid4()),
+            email=email.lower(),
+            password_hash=hash_password(password),
+        )
+    )
+    db.commit()
+    db.close()
+
+
+create_password_user(VALID_EMAIL, VALID_PASS)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # REGISTRATION TESTS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -36,21 +60,20 @@ VALID_PASS  = "SecureP@ss123!"
 class TestRegistration:
     """Tests for POST /api/auth/register"""
 
-    def test_register_valid(self):
-        """Register with valid credentials — expect 200."""
+    def test_register_closed(self):
+        """Password registration is closed — expect 403."""
         resp = client.post("/api/auth/register", json={
-            "email": VALID_EMAIL, "password": VALID_PASS,
+            "email": f"closed_{uuid.uuid4().hex[:8]}@example.com", "password": VALID_PASS,
         })
-        assert resp.status_code == 200
-        assert "created" in resp.json()["message"].lower()
+        assert resp.status_code == 403
+        assert "passkey" in resp.json()["detail"].lower()
 
     def test_register_duplicate_email(self):
-        """Register with duplicate email — expect 409 with clear message."""
+        """Closed register — duplicate attempt still 403 (not 409)."""
         dup_email = "duplicate@test.example"
-        client.post("/api/auth/register", json={"email": dup_email, "password": VALID_PASS})
+        create_password_user(dup_email, VALID_PASS)
         resp = client.post("/api/auth/register", json={"email": dup_email, "password": VALID_PASS})
-        assert resp.status_code == 409
-        assert "already exists" in resp.json()["detail"].lower()
+        assert resp.status_code == 403
 
     def test_register_missing_email(self):
         """Register with missing email — expect 422 validation error."""
@@ -95,12 +118,12 @@ class TestRegistration:
         assert resp.status_code == 422
 
     def test_register_short_password(self):
-        """Register with password < 8 chars — expect 422."""
+        """Closed register — short password still rejected at validation or 403."""
         resp = client.post("/api/auth/register", json={
             "email": "short@pw.com",
             "password": "abc",
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (403, 422)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -112,6 +135,7 @@ class TestLogin:
 
     def test_login_correct_credentials(self):
         """Login with correct credentials — expect 200 + JWT token."""
+        create_password_user(VALID_EMAIL, VALID_PASS)
         resp = client.post("/api/auth/login", json={
             "email": VALID_EMAIL, "password": VALID_PASS,
         })
@@ -164,6 +188,7 @@ class TestLogin:
 
 def _get_valid_token():
     """Helper — get a valid access token."""
+    create_password_user(VALID_EMAIL, VALID_PASS)
     resp = client.post("/api/auth/login", json={
         "email": VALID_EMAIL, "password": VALID_PASS,
     })
@@ -259,7 +284,7 @@ class TestAuthorization:
     def _create_user_and_vendor(self, email_suffix):
         """Helper — create a user, login, add a vendor, return (token, vendor_id)."""
         email = f"authtest_{email_suffix}_{uuid.uuid4().hex[:6]}@example.com"
-        client.post("/api/auth/register", json={"email": email, "password": VALID_PASS})
+        create_password_user(email, VALID_PASS)
         login = client.post("/api/auth/login", json={"email": email, "password": VALID_PASS})
         token = login.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
@@ -304,8 +329,10 @@ class TestPasswordSecurity:
         """Verify passwords are stored as bcrypt hashes."""
         from database import SessionLocal
         from models import User
+        email = f"bcrypt_{uuid.uuid4().hex[:8]}@example.com"
+        create_password_user(email, VALID_PASS)
         db = SessionLocal()
-        user = db.query(User).filter(User.email == VALID_EMAIL).first()
+        user = db.query(User).filter(User.email == email).first()
         assert user is not None
         # bcrypt hashes start with $2b$ or $2a$
         assert user.password_hash.startswith("$2b$") or user.password_hash.startswith("$2a$")
@@ -313,11 +340,15 @@ class TestPasswordSecurity:
 
     def test_password_not_in_api_response(self):
         """Verify password is not returned in any API response."""
-        token = _get_valid_token()
+        email = f"nopw_{uuid.uuid4().hex[:8]}@example.com"
+        create_password_user(email, VALID_PASS)
+        token = client.post("/api/auth/login", json={
+            "email": email, "password": VALID_PASS,
+        }).json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
         # Check login response
         login_resp = client.post("/api/auth/login", json={
-            "email": VALID_EMAIL, "password": VALID_PASS,
+            "email": email, "password": VALID_PASS,
         })
         body = str(login_resp.json())
         assert VALID_PASS not in body
@@ -325,18 +356,18 @@ class TestPasswordSecurity:
         assert "$2b$" not in body
 
     def test_min_password_enforced(self):
-        """Verify minimum password length is enforced."""
+        """Closed register — minimum password rules irrelevant; endpoint returns 403."""
         resp = client.post("/api/auth/register", json={
             "email": "minpw@test.com", "password": "short",
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (403, 422)
 
     def test_max_password_enforced(self):
-        """Verify maximum password length is enforced (bcrypt DoS protection)."""
+        """Closed register — oversized password returns 403 or 422."""
         resp = client.post("/api/auth/register", json={
             "email": "maxpw@test.com", "password": "A" * 200,
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (403, 422)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

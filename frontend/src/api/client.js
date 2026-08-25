@@ -104,6 +104,14 @@ export const getDashboardSummary = ()  => api.get('/dashboard/summary')
 export const login          = (data) => api.post('/auth/login', data)
 export const register       = (data) => api.post('/auth/register', data)
 export const logout         = ()     => api.post('/auth/logout')
+export const webauthnRegisterBegin = (data) => api.post('/auth/webauthn/register/begin', data)
+export const webauthnRegisterFinish = (data) => api.post('/auth/webauthn/register/finish', data)
+export const webauthnAssertBegin = (data) => api.post('/auth/webauthn/assert/begin', data ?? {})
+export const webauthnAssertFinish = (data) => api.post('/auth/webauthn/assert/finish', data)
+export const webauthnStepUpBegin = () => api.post('/auth/webauthn/step-up/begin')
+export const recoveryConsume = (data) => api.post('/auth/recovery/consume', data)
+export const googleLoginStart = () => { window.location.href = `${BASE_URL}/auth/google/start` }
+export const googleLinkStart = () => { window.location.href = `${BASE_URL}/auth/google/link/start` }
 // config override used by the initial silent refresh — needs a longer bound to
 // survive an HF cold start instead of hanging on the instance's unbounded default
 export const refresh        = (config) => api.post('/auth/refresh', {}, config)

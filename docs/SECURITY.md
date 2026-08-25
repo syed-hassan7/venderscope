@@ -47,11 +47,15 @@ We ask that you:
 ## Our Security Practices
 
 ### Authentication
-- Passwords hashed with bcrypt (minimum 12 rounds)
+- **Passkeys (WebAuthn)** — phishing-resistant sign-in with user verification required; public keys and credential IDs stored server-side (never biometrics)
+- **Google Sign-In** — optional OAuth 2.0 with PKCE; `email_verified` required; no silent email-link to existing password accounts
+- **Recovery codes** — 10 one-time codes generated at passkey signup, shown once, stored hashed (HMAC-SHA256 + bcrypt)
+- **Legacy passwords** — existing bcrypt accounts can still sign in; new password registration is closed
+- Passwords hashed with bcrypt (minimum 12 rounds) where still used
 - JWT access tokens are short-lived (15 minutes) and stored in memory only — never in localStorage
 - Refresh tokens are 7-day single-use tokens stored in httpOnly, Secure, SameSite=None cookies — inaccessible to JavaScript
 - Used refresh tokens are immediately invalidated (JTI blacklist) — each token can only be used once
-- Password reconfirmation required before permanent account deletion — protects against an attacker with a briefly obtained access token
+- Step-up verification before permanent account deletion — password, recovery code, or passkey depending on registered factors
 - CSRF origin validation on all cookie-consuming endpoints (refresh, logout, account deletion)
 - Brute force protection on all authentication endpoints
 - Account enumeration prevention — login errors never reveal whether an email exists

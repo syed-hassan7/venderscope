@@ -26,8 +26,15 @@ If you use the Guest Scan feature (accessible without an account), VenderScope p
 ### 2.1 Account Data
 When you create an account, we collect:
 - Email address
-- Password (stored as a bcrypt hash — we cannot recover your plaintext password)
 - Account creation timestamp
+
+**Passkeys:** We store a public key and credential identifier for your passkey. We never store biometrics or device secrets.
+
+**Recovery codes:** We store hashed one-time recovery codes (not plaintext). Codes are shown once at signup.
+
+**Google Sign-In (optional):** If you link Google, we store Google's subject identifier (`sub`) and your verified Google email for sign-in.
+
+**Legacy passwords:** Older accounts may still use a bcrypt password hash. New signups use passkeys instead of passwords.
 
 We do not collect your name, phone number, address, date of birth, or payment information.
 

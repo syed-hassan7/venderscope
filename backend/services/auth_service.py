@@ -28,6 +28,16 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7  # 7 days is standard for rotation-based refresh t
 BCRYPT_ROUNDS = 12
 
 _bearer = HTTPBearer()
+_optional_bearer = HTTPBearer(auto_error=False)
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
+    db: Session = Depends(get_db),
+) -> User | None:
+    if credentials is None:
+        return None
+    return get_current_user(credentials, db)
 
 
 def hash_password(password: str) -> str:
