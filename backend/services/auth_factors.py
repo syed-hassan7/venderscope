@@ -1,8 +1,11 @@
 """User authentication factor helpers."""
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from models import User, WebAuthnCredential, RecoveryCodeHash
+from services.auth_service import verify_password
+from services.webauthn_service import finish_step_up
 
 
 def passkey_count(db: Session, user_id: str) -> int:
@@ -51,3 +54,21 @@ def can_unlink_google(db: Session, user: User) -> bool:
     if user.google_sub is None:
         return False
     return passkey_count(db, user.id) > 0
+
+
+def require_step_up(
+    db: Session,
+    user: User,
+    *,
+    password: str | None = None,
+    challenge_id: str | None = None,
+    credential: dict | None = None,
+) -> None:
+    if challenge_id and credential:
+        finish_step_up(db, challenge_id, credential, user)
+        return
+    if password and user.password_hash:
+        if verify_password(password, user.password_hash):
+            return
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    raise HTTPException(status_code=403, detail="Step-up required")

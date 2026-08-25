@@ -4,6 +4,7 @@ import {
   deletePasskey,
   googleUnlink,
   googleLinkStart,
+  googleReauthStart,
   getMe,
   webauthnRegisterBegin,
   webauthnRegisterFinish,
@@ -37,6 +38,22 @@ export default function SignInMethodsModal({ onClose }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [googleStepupReady, setGoogleStepupReady] = useState(false)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const stepup = params.get('stepup')
+    const stepupError = params.get('stepup_error')
+    if (stepup === '1' || stepupError === '1') {
+      if (stepup === '1') setGoogleStepupReady(true)
+      if (stepupError === '1') setError('Google re-authentication did not match your linked account.')
+      params.delete('stepup')
+      params.delete('stepup_error')
+      const url = new URL(window.location.href)
+      url.search = params.toString()
+      window.history.replaceState({}, '', url.pathname + (url.search ? `?${url.search}` : ''))
+    }
+  }, [])
 
   const load = async () => {
     setError('')
@@ -93,18 +110,37 @@ export default function SignInMethodsModal({ onClose }) {
     setBusy('google')
     setError('')
     try {
-      await googleUnlink()
+      const extra = await stepUpPayload()
+      await googleUnlink(extra)
       await afterChange()
     } catch (e) {
-      setError(e.response?.data?.detail || 'Could not disconnect Google.')
+      setError(e.response?.data?.detail || e.message || 'Could not disconnect Google.')
     } finally {
       setBusy('')
     }
   }
 
+  const isGoogleOnly = passkeys.length === 0 && !factors?.password && Boolean(factors?.google)
+
   const handleAddPasskey = async () => {
     if (!isWebAuthnSupported()) {
       setError('Passkeys are not supported in this browser.')
+      return
+    }
+    // Google-only accounts have no existing passkey/password to step up with —
+    // prove current control of the linked Google account via a fresh OAuth round
+    // trip instead, then resume here (googleStepupReady) after the redirect back.
+    if (isGoogleOnly && !googleStepupReady) {
+      setBusy('add')
+      setError('')
+      try {
+        const { data } = await googleReauthStart()
+        if (!data?.url) throw new Error('Could not start Google re-authentication.')
+        window.location.href = data.url
+      } catch (e) {
+        setError(e.response?.data?.detail || e.message || 'Could not start Google re-authentication.')
+        setBusy('')
+      }
       return
     }
     setBusy('add')
@@ -117,6 +153,7 @@ export default function SignInMethodsModal({ onClose }) {
       const payload = await createPasskey(options)
       await webauthnRegisterFinish(payload)
       setConfirmPassword('')
+      setGoogleStepupReady(false)
       await afterChange()
     } catch (e) {
       setError(e.response?.data?.detail || e.message || 'Could not add passkey.')
@@ -179,7 +216,9 @@ export default function SignInMethodsModal({ onClose }) {
                   className="text-xs font-medium"
                   style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent-l)', cursor: busy ? 'not-allowed' : 'pointer' }}
                 >
-                  {busy === 'add' ? 'Waiting for device…' : 'Add passkey'}
+                  {busy === 'add'
+                    ? (isGoogleOnly && !googleStepupReady ? 'Redirecting to Google…' : 'Waiting for device…')
+                    : (isGoogleOnly && googleStepupReady ? 'Google verified — finish adding passkey' : 'Add passkey')}
                 </button>
               </div>
               {passkeys.length === 0 ? (

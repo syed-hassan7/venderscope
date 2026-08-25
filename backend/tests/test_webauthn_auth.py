@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
 from main import app
 from database import engine, Base, SessionLocal
@@ -225,7 +226,7 @@ class TestWebAuthnRegister:
         db = SessionLocal()
         assert db.query(User).filter(User.email == email.lower()).first() is None
         db.close()
-    def _seed_user_with_cred(self):
+    def _seed_user_with_cred(self, sign_count=1):
         email = f"wk_{uuid.uuid4().hex[:8]}@example.com"
         user_id = str(uuid.uuid4())
         cred_id = bytes_to_base64url(b"assert-cred-id")
@@ -238,7 +239,7 @@ class TestWebAuthnRegister:
                 user_id=user_id,
                 credential_id=cred_id,
                 public_key=base64.b64encode(b"public-key-bytes").decode(),
-                sign_count=1,
+                sign_count=sign_count,
             )
         )
         db.commit()
@@ -277,8 +278,12 @@ class TestWebAuthnRegister:
         assert "access_token" in finish.json()
         assert "vs_refresh" in finish.cookies
 
-    def test_sign_count_rollback_rejected(self):
-        email, cred_id, user_id = self._seed_user_with_cred()
+    def test_sign_count_zero_zero_login_succeeds(self):
+        """Synced/platform passkeys (Google Password Manager, iCloud Keychain, Windows
+        Hello resident keys) commonly always report sign_count=0. The library's own
+        verify_authentication_response already exempts 0-vs-0 from clone detection —
+        our app must not re-reject it with a stricter redundant check."""
+        email, cred_id, user_id = self._seed_user_with_cred(sign_count=0)
         begin = client.post("/api/auth/webauthn/assert/begin", json={"email": email})
         challenge_id = begin.json()["challengeId"]
 
@@ -288,6 +293,36 @@ class TestWebAuthnRegister:
         with patch(
             "services.webauthn_service.verify_authentication_response",
             return_value=mock_result,
+        ):
+            finish = client.post(
+                "/api/auth/webauthn/assert/finish",
+                json={
+                    "challenge_id": challenge_id,
+                    "credential": {
+                        "id": cred_id,
+                        "rawId": cred_id,
+                        "type": "public-key",
+                        "response": {
+                            "clientDataJSON": base64.b64encode(b"{}").decode(),
+                            "authenticatorData": base64.b64encode(b"auth").decode(),
+                            "signature": base64.b64encode(b"sig").decode(),
+                        },
+                    },
+                },
+            )
+        assert finish.status_code == 200
+        assert "access_token" in finish.json()
+
+    def test_sign_count_rollback_rejected(self):
+        """A genuine clone/replay makes the real library raise InvalidAuthenticationResponse
+        — the endpoint must translate that to a clean 401, not let it 500."""
+        email, cred_id, user_id = self._seed_user_with_cred(sign_count=5)
+        begin = client.post("/api/auth/webauthn/assert/begin", json={"email": email})
+        challenge_id = begin.json()["challengeId"]
+
+        with patch(
+            "services.webauthn_service.verify_authentication_response",
+            side_effect=InvalidAuthenticationResponse("sign count did not increase"),
         ):
             finish = client.post(
                 "/api/auth/webauthn/assert/finish",

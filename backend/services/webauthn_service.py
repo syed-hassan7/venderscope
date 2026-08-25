@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -302,19 +303,22 @@ def _verify_assertion_with_row(db: Session, row: WebAuthnChallenge, credential: 
 
     public_key = base64.b64decode(stored.public_key)
 
-    verification = verify_authentication_response(
-        credential=credential,
-        expected_challenge=base64url_to_bytes(row.challenge),
-        expected_rp_id=_rp_id(),
-        expected_origin=_expected_origins(),
-        credential_public_key=public_key,
-        credential_current_sign_count=stored.sign_count,
-        require_user_verification=True,
-    )
-
-    if verification.new_sign_count <= stored.sign_count:
+    try:
+        verification = verify_authentication_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(row.challenge),
+            expected_rp_id=_rp_id(),
+            expected_origin=_expected_origins(),
+            credential_public_key=public_key,
+            credential_current_sign_count=stored.sign_count,
+            require_user_verification=True,
+        )
+    except InvalidAuthenticationResponse:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    # The library already enforces sign-count clone detection, correctly exempting
+    # the 0-vs-0 case that synced/platform passkeys (which don't track counters)
+    # always report. Don't re-check it here without that exemption.
     stored.sign_count = verification.new_sign_count
     stored.last_used_at = datetime.now(timezone.utc)
     db.commit()

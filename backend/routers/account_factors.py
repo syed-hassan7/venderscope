@@ -1,9 +1,11 @@
 """Per-factor auth management: list/delete passkeys, unlink Google."""
 
 from datetime import datetime
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from config import is_allowed_frontend_origin
@@ -11,8 +13,21 @@ from database import get_db
 from limiter import limiter
 from models import User, WebAuthnCredential
 from services.audit import audit
-from services.auth_factors import can_remove_passkey, can_unlink_google
+from services.auth_factors import can_remove_passkey, can_unlink_google, require_step_up
 from services.auth_service import get_current_user
+
+
+class GoogleUnlinkRequest(BaseModel):
+    password: Optional[str] = None
+    challenge_id: Optional[str] = None
+    credential: Optional[dict[str, Any]] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_max_length(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 128:
+            raise ValueError("Password too long")
+        return v
 
 router = APIRouter()
 _bearer = HTTPBearer(auto_error=False)
@@ -105,6 +120,7 @@ def delete_webauthn_credential(
 @limiter.limit("10/minute")
 def unlink_google(
     request: Request,
+    payload: GoogleUnlinkRequest = GoogleUnlinkRequest(),
     db: Session = Depends(get_db),
     current_user: User = Depends(_current_user),
 ):
@@ -113,6 +129,13 @@ def unlink_google(
         raise HTTPException(status_code=400, detail="Google is not linked")
     if not can_unlink_google(db, current_user):
         raise HTTPException(status_code=400, detail="Cannot remove last sign-in method")
+    require_step_up(
+        db,
+        current_user,
+        password=payload.password,
+        challenge_id=payload.challenge_id,
+        credential=payload.credential,
+    )
     current_user.google_sub = None
     db.commit()
     audit(db, "google.unlinked", request, user_id=current_user.id)

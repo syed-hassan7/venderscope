@@ -113,7 +113,8 @@ export const recoveryConsume = (data) => api.post('/auth/recovery/consume', data
 export const recoveryRegenerate = (data) => api.post('/auth/recovery/regenerate', data)
 export const googleLoginStart = () => { window.location.href = `${BASE_URL}/auth/google/start` }
 export const googleLinkStart = (body = {}) => api.post('/auth/google/link/start', body)
-export const googleUnlink = () => api.post('/auth/google/unlink')
+export const googleUnlink = (body = {}) => api.post('/auth/google/unlink', body)
+export const googleReauthStart = () => api.post('/auth/google/reauth/start')
 export const listPasskeys = () => api.get('/auth/webauthn/credentials')
 export const deletePasskey = (id) => api.delete(`/auth/webauthn/credentials/${id}`)
 // config override used by the initial silent refresh — needs a longer bound to

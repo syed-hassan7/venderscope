@@ -2,14 +2,17 @@
 
 import uuid
 from datetime import datetime, timezone
+from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from webauthn.helpers import bytes_to_base64url
 
 from main import app
 from database import engine, Base, SessionLocal
 from models import User, WebAuthnCredential
 from services.auth_service import create_access_token, hash_password
+from services.google_oauth_service import mint_google_stepup_token
 from services.recovery_service import generate_plain_codes, store_recovery_codes
 
 client = TestClient(app)
@@ -45,10 +48,27 @@ def _add_user(
     return user
 
 
+def _passkey_stepup_extra(user_id: str, cred_id: str) -> dict:
+    begin = client.post("/api/auth/webauthn/step-up/begin", headers=_headers(user_id))
+    return {
+        "challenge_id": begin.json()["challengeId"],
+        "credential": {
+            "id": cred_id,
+            "rawId": cred_id,
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": "e30=",
+                "authenticatorData": "YXV0aA==",
+                "signature": "c2ln",
+            },
+        },
+    }
+
+
 def _add_passkey(db, user_id: str, label: str | None = "YubiKey") -> WebAuthnCredential:
     cred = WebAuthnCredential(
         user_id=user_id,
-        credential_id="cred-" + uuid.uuid4().hex,
+        credential_id=bytes_to_base64url(("cred-" + uuid.uuid4().hex).encode()),
         public_key="dGVzdC1wdWJsaWMta2V5",
         sign_count=0,
         device_label=label,
@@ -214,14 +234,30 @@ class TestUnlinkGoogle:
     def test_unlink_google_when_passkey_remains(self):
         db = SessionLocal()
         user = _add_user(db, password=None, google_sub="google-sub-" + uuid.uuid4().hex)
+        cred = _add_passkey(db, user.id)
+        uid, cred_id = user.id, cred.credential_id
+        db.close()
+
+        extra = _passkey_stepup_extra(uid, cred_id)
+        mock_result = MagicMock(new_sign_count=1)
+        with patch("services.webauthn_service.verify_authentication_response", return_value=mock_result):
+            resp = client.post("/api/auth/google/unlink", headers=_headers(uid), json=extra)
+        assert resp.status_code == 200
+        db = SessionLocal()
+        assert db.query(User).filter_by(id=uid).one().google_sub is None
+        db.close()
+
+    def test_unlink_google_without_stepup_returns_403(self):
+        db = SessionLocal()
+        user = _add_user(db, password=None, google_sub="google-sub-" + uuid.uuid4().hex)
         _add_passkey(db, user.id)
         uid = user.id
         db.close()
 
         resp = client.post("/api/auth/google/unlink", headers=_headers(uid))
-        assert resp.status_code == 200
+        assert resp.status_code == 403
         db = SessionLocal()
-        assert db.query(User).filter_by(id=uid).one().google_sub is None
+        assert db.query(User).filter_by(id=uid).one().google_sub is not None
         db.close()
 
     def test_unlink_google_last_factor_returns_400(self):

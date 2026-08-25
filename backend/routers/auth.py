@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from models import User, RevokedToken, AuditLog, WebAuthnChallenge
 from limiter import limiter
 from services.audit import audit
-from services.auth_factors import get_user_factors, passkey_count
+from services.auth_factors import get_user_factors, passkey_count, require_step_up
 from services.auth_service import (
     verify_password,
     create_access_token,
@@ -37,11 +37,15 @@ from services.webauthn_service import (
 )
 from services.google_oauth_service import (
     GOOGLE_PENDING_TTL_MINUTES,
+    GOOGLE_STEPUP_TTL_MINUTES,
     build_authorize_url,
     exchange_code_and_verify_id_token,
     mint_google_pending_token,
+    mint_google_stepup_token,
     read_google_pending_token,
+    read_google_stepup_token,
     resolve_google_login,
+    verify_google_stepup,
 )
 
 router = APIRouter()
@@ -204,6 +208,27 @@ def _clear_google_pending_cookie(response: Response) -> None:
     )
 
 
+def _set_google_stepup_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key="vs_google_stepup",
+        value=token,
+        httponly=True,
+        secure=_IS_PROD,
+        samesite="none" if _IS_PROD else "lax",
+        max_age=GOOGLE_STEPUP_TTL_MINUTES * 60,
+        path="/api/auth",
+    )
+
+
+def _clear_google_stepup_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key="vs_google_stepup",
+        path="/api/auth",
+        samesite="none" if _IS_PROD else "lax",
+        secure=_IS_PROD,
+    )
+
+
 def _require_google_pending(request: Request) -> dict:
     pending = read_google_pending_token(request.cookies.get("vs_google_pending"))
     if not pending:
@@ -227,24 +252,6 @@ def _verify_origin(request: Request, *, fail_closed: bool = False) -> None:
         return
     if not is_allowed_frontend_origin(origin):
         raise HTTPException(status_code=403, detail="Origin not allowed")
-
-
-def _require_step_up(
-    db: Session,
-    user: User,
-    *,
-    password: str | None = None,
-    challenge_id: str | None = None,
-    credential: dict | None = None,
-) -> None:
-    if challenge_id and credential:
-        finish_step_up(db, challenge_id, credential, user)
-        return
-    if password and user.password_hash:
-        if verify_password(password, user.password_hash):
-            return
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    raise HTTPException(status_code=403, detail="Step-up required")
 
 
 @router.post("/register")
@@ -371,16 +378,27 @@ def webauthn_register_begin(
     payload: WebAuthnRegisterBeginRequest,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
+    vs_google_stepup: str = Cookie(default=None),
 ):
     if current_user is not None:
         if passkey_count(db, current_user.id) > 0 or current_user.password_hash:
-            _require_step_up(
+            require_step_up(
                 db,
                 current_user,
                 password=payload.password,
                 challenge_id=payload.challenge_id,
                 credential=payload.credential,
             )
+        else:
+            # Google-only account, first passkey — no existing factor to step up
+            # with, so a fresh Google re-auth (POST /google/reauth/start) proves
+            # current control instead. See GOOGLE_STEPUP_TTL_MINUTES.
+            stepup_user_id = read_google_stepup_token(vs_google_stepup)
+            if stepup_user_id != current_user.id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Google re-authentication required to add a passkey",
+                )
         return begin_registration(db, current_user.email, user=current_user, for_signup=False)
     pending = _require_google_pending(request)
     _verify_origin(request, fail_closed=True)
@@ -431,6 +449,7 @@ def webauthn_register_finish(
         raise
     session = _issue_session(response, user, request, db, "webauthn.register.success")
     _clear_google_pending_cookie(response)
+    _clear_google_stepup_cookie(response)
     result = dict(session)
     if recovery_codes:
         result["recovery_codes"] = recovery_codes
@@ -519,7 +538,7 @@ def google_start_link(
     current_user: User = Depends(get_current_user),
 ):
     _verify_origin(request, fail_closed=True)
-    _require_step_up(
+    require_step_up(
         db,
         current_user,
         password=payload.password,
@@ -527,6 +546,19 @@ def google_start_link(
         credential=payload.credential,
     )
     return {"url": build_authorize_url(db, "link", user_id=current_user.id)}
+
+
+@router.post("/google/reauth/start")
+@limiter.limit("10/minute")
+def google_start_reauth(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _verify_origin(request, fail_closed=True)
+    if current_user.google_sub is None:
+        raise HTTPException(status_code=400, detail="Google is not linked")
+    return {"url": build_authorize_url(db, "step_up", user_id=current_user.id)}
 
 
 @router.get("/google/callback")
@@ -540,6 +572,16 @@ def google_callback(
 ):
     google_info = exchange_code_and_verify_id_token(db, code, state)
     frontend = get_primary_frontend_url()
+
+    if google_info["purpose"] == "step_up":
+        try:
+            user = verify_google_stepup(db, google_info)
+        except HTTPException:
+            return RedirectResponse(f"{frontend}/?stepup_error=1")
+        redirect = RedirectResponse(f"{frontend}/?stepup=1")
+        _set_google_stepup_cookie(redirect, mint_google_stepup_token(user_id=user.id))
+        return redirect
+
     try:
         user = resolve_google_login(db, google_info)
     except HTTPException as exc:

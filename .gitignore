@@ -29,6 +29,11 @@ frontend/dist/
 # VS Code
 .vscode/
 
+# Cursor state (local agent session, not shared)
+.cursor/
+
+docs/SECURITY_AUDIT_*.md
+
 # Claude context files
 CLAUDE.md
 tasks/

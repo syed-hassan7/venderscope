@@ -195,6 +195,8 @@ def resolve_google_login(db: Session, google_info: dict) -> User:
 
 GOOGLE_PENDING_TTL_MINUTES = 15
 GOOGLE_PENDING_TYPE = "google_pending"
+GOOGLE_STEPUP_TTL_MINUTES = 5
+GOOGLE_STEPUP_TYPE = "google_stepup"
 
 
 def mint_google_pending_token(*, sub: str, email: str) -> str:
@@ -224,3 +226,38 @@ def read_google_pending_token(token: str | None) -> dict | None:
     if not isinstance(email, str) or not email:
         return None
     return {"google_sub": google_sub, "email": email.lower().strip()}
+
+
+def mint_google_stepup_token(*, user_id: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=GOOGLE_STEPUP_TTL_MINUTES)
+    payload = {"type": GOOGLE_STEPUP_TYPE, "user_id": user_id, "exp": expire}
+    return jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
+
+
+def read_google_stepup_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("type") != GOOGLE_STEPUP_TYPE:
+        return None
+    user_id = payload.get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    return user_id
+
+
+def verify_google_stepup(db: Session, google_info: dict) -> User:
+    """Verify a completed 'step_up' OAuth round trip proves control of the SAME
+    Google account already on file — not just any Google login."""
+    user_id = google_info.get("link_user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid step-up session")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid step-up session")
+    if user.google_sub != google_info["sub"]:
+        raise HTTPException(status_code=409, detail="Google account does not match")
+    return user

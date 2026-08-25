@@ -30,7 +30,12 @@ const FooterLink = ({ to, children, external }) =>
 export default function Footer() {
   const [showDelete, setShowDelete] = useState(false)
   const [showRecovery, setShowRecovery] = useState(false)
-  const [showSignIn, setShowSignIn] = useState(false)
+  // Resume the "add passkey" flow after a Google re-auth redirect. SignInMethodsModal
+  // owns reading/clearing the ?stepup param itself — this just needs the modal open.
+  const [showSignIn, setShowSignIn] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('stepup') === '1' || params.get('stepup_error') === '1'
+  })
   const openCookieSettings = () => {
     window.dispatchEvent(new Event(CONSENT_SETTINGS_EVENT))
   }
