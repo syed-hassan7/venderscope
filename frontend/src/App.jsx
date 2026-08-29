@@ -1,5 +1,6 @@
 import { Suspense, lazy, useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { Analytics } from '@vercel/analytics/react'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import SiteConsentBanner from './components/SiteConsentBanner'
 import AppShell from './components/AppShell'
@@ -159,6 +160,7 @@ export default function App() {
       <BrowserRouter>
         <AppRouter />
         <SiteConsentBanner />
+        <Analytics />
       </BrowserRouter>
     </AuthProvider>
   )
